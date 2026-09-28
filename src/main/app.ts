@@ -1,0 +1,81 @@
+import { activateIdentityPolicy } from "./session.ts";
+import type { IdentityPolicySession } from "./session.ts";
+import { assertIdentityPolicy } from "./user-agent.ts";
+import { buildWindowOptions } from "./window.ts";
+import type { SecureWindowOptions } from "./window.ts";
+
+// Production navigation target. The test seam is dependency injection of the
+// runtime and the target URL (see startHost): the shipped entry below always
+// passes this constant, and no environment, CLI, or config override exists.
+export const YOUTUBE_TV_URL = "https://www.youtube.com/tv";
+
+export interface HostWebContents {
+  on(
+    event: string,
+    listener: (
+      event: { preventDefault(): void },
+      input: { key?: string; type?: string },
+    ) => void,
+  ): unknown;
+}
+
+export interface HostWindow {
+  loadURL(url: string): Promise<void>;
+  webContents: HostWebContents;
+  setFullScreen(fullscreen: boolean): void;
+  isFullScreen(): boolean;
+}
+
+export interface HostRuntime {
+  session: IdentityPolicySession;
+  appPath: string;
+  createWindow(options: SecureWindowOptions): HostWindow;
+}
+
+export interface StartedHost {
+  window: HostWindow;
+  userAgent: string;
+  headerInterceptionActive: boolean;
+}
+
+// Seam for todo 6: the pre-window update stage runs here, after the identity
+// policy is active and before any window is created. Currently intentionally
+// a no-op; todo 6 inserts its launcher/update check at this call site.
+export async function runPreWindowStage(): Promise<void> {
+  return undefined;
+}
+
+// F11 is the only host-level key binding: it toggles fullscreen. Esc is
+// deliberately never intercepted, so YouTube TV keeps its own Escape
+// behavior. The keyDown gate keeps one physical press to one toggle, since
+// before-input-event fires for both keyDown and keyUp.
+export function attachFullscreenToggle(window: HostWindow): void {
+  window.webContents.on("before-input-event", (event, input) => {
+    if (input.key === "F11" && input.type === "keyDown") {
+      event.preventDefault();
+      window.setFullScreen(!window.isFullScreen());
+    }
+  });
+}
+
+// Composition root: activate the fixed identity first, assert it, run the
+// pre-window stage, then create the (validated, fullscreen, sandboxed)
+// window and load the target exactly once. The target never loads unless the
+// identity policy activated successfully.
+export async function startHost(
+  runtime: HostRuntime,
+  targetUrl: string,
+): Promise<StartedHost> {
+  const evidence = activateIdentityPolicy(runtime.session);
+  assertIdentityPolicy(evidence.userAgent);
+  await runPreWindowStage();
+  const options = buildWindowOptions(runtime.appPath);
+  const window = runtime.createWindow(options);
+  attachFullscreenToggle(window);
+  await window.loadURL(targetUrl);
+  return {
+    window,
+    userAgent: evidence.userAgent,
+    headerInterceptionActive: evidence.headerInterceptionActive,
+  };
+}

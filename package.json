@@ -30,6 +30,7 @@
     "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.preload.json",
     "test": "npm run test:unit",
     "test:unit": "node scripts/run-tests.cjs unit",
+    "pretest:electron": "npm run build",
     "test:electron": "node scripts/run-tests.cjs electron",
     "package": "npm run build && electron-builder --win --x64 --dir --publish never",
     "verify:artifacts": "node scripts/verify-artifacts.cjs",
