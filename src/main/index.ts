@@ -17,7 +17,7 @@ import { IDENTITY_PARTITION } from "./session.ts";
 import { createMemoryEtagCache } from "./update/discovery.ts";
 import { PRODUCTION_KEYRING } from "./update/keyring.ts";
 import { readLaunchUpdateNonce } from "./update/launch-arguments.ts";
-import { verifyAndConsumeSuccessMarker } from "./update/relaunch.ts";
+import { classifyUpdateRecovery } from "./update/recovery.ts";
 import { runPreWindowStage, spawnDetachedInstaller } from "./update/startup.ts";
 
 async function bootstrap(): Promise<void> {
@@ -56,35 +56,38 @@ async function bootstrap(): Promise<void> {
     void shell.openExternal(SUPPORT_RELEASE_URL);
   };
 
-  // Post-install relaunch verification: the installer relaunches this
-  // executable with --update-nonce and is expected to have written the
-  // atomic success marker for that nonce first. A valid marker is consumed
-  // and the app continues. A missing/invalid marker cannot be proven, so
-  // the bilingual repair/manual-download guidance is shown — there is no
-  // rollback and the message never claims one.
+  // Terminal-outcome bookkeeping for the previous update attempt, before any
+  // window exists. A completed install relaunches this executable carrying
+  // the attempt nonce and has published that nonce's atomic success marker;
+  // that receipt is consumed and the app continues. Any recorded attempt that
+  // no launch can confirm — a missing or invalid marker, or an installer that
+  // aborted or died before it could relaunch at all — is classified and the
+  // bilingual repair/manual-download guidance is shown. There is no rollback
+  // and the message never claims one.
+  const version = app.getVersion();
   const updateDirectories = resolveUpdateDirectoryConvention(profile.directory);
-  const launchNonce = readLaunchUpdateNonce();
-  if (launchNonce !== null) {
-    const verification = verifyAndConsumeSuccessMarker({
-      statusDirectory: updateDirectories.statusDirectory,
-      nonce: launchNonce,
-    });
-    if (verification.ok) {
-      diagnostics?.record({ event: "update-relaunch-verified" });
-    } else {
-      diagnostics?.record({ event: "update-relaunch-repair" });
-      await showUpdateGuidance(
-        presenter,
-        updateRepairDialog(verification.reason),
-        openDownloadPage,
-      );
-    }
+  const recovery = classifyUpdateRecovery({
+    statusDirectory: updateDirectories.statusDirectory,
+    updateBaseDirectory: updateDirectories.updateBaseDirectory,
+    launchNonce: readLaunchUpdateNonce(),
+    currentVersion: version,
+  });
+  if (recovery.kind === "repair") {
+    diagnostics?.record({ event: "update-relaunch-repair" });
+    await showUpdateGuidance(
+      presenter,
+      updateRepairDialog(recovery.reason),
+      openDownloadPage,
+    );
+  } else if (recovery.kind !== "none") {
+    // Both a confirmed receipt and an attempt the running version already
+    // satisfies mean the previous update needs nothing from the user.
+    diagnostics?.record({ event: "update-relaunch-verified" });
   }
 
   // The launcher stage. `startHost` awaits this BEFORE creating a window, so
   // a verified installer is handed off before any UI exists, and a quit
   // decision returns without ever creating a window.
-  const version = app.getVersion();
   await startHost(
     {
       session: session.fromPartition(IDENTITY_PARTITION),

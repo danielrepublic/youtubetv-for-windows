@@ -82,9 +82,12 @@ export function profileFallbackDialog(
 //   - updateFailureDialog — a PRE-install failure (download, verification, or
 //     the verified installer could not be started). The installed version
 //     still launches; the user may download the release manually.
-//   - updateRepairDialog  — a POST-install problem: the update ran but the
-//     atomic success marker is missing or invalid, so the relaunched
-//     bootstrap cannot confirm the install.
+//   - updateRepairDialog  — a POST-handoff problem: the update was handed to
+//     the installer but the installation cannot be confirmed. Either the
+//     atomic success marker is missing or invalid, or no installer ever
+//     relaunched the app and the recorded attempt is unconfirmed — a failed
+//     installer or a nonzero installer exit can only ever be detected from the
+//     app side, because the launcher has already quit and observes nothing.
 //
 // Neither message ever promises a rollback. The previous application files
 // were replaced by the installer, and the documented recovery is a manual
@@ -95,7 +98,22 @@ export function profileFallbackDialog(
 export type UpdateFailureKind =
   "download-or-verify-failed" | "installer-launch-failed";
 
-export type RelaunchRepairReason = "missing" | "invalid";
+/**
+ * Why a post-install attempt cannot be confirmed.
+ *
+ *   - `missing` / `invalid` — the installer relaunched this executable with
+ *     the nonce, so the atomic receipt is expected to exist and does not.
+ *   - `unconfirmed` — no installer relaunched the app at all, yet an attempt
+ *     was durably recorded before the handoff. The installer aborted before it
+ *     could write anything (a bad handoff, the parent-wait timeout) or died
+ *     part-way through replacing files, so neither the receipt nor the target
+ *     version can be confirmed.
+ *
+ * All three share one honest message shape: the installation cannot be
+ * confirmed, there is no automatic rollback, and the documented recovery is a
+ * manual download from the release page.
+ */
+export type UpdateRepairReason = "missing" | "invalid" | "unconfirmed";
 
 const OPEN_DOWNLOAD_BUTTON = "開啟下載頁面 (Open download page)";
 const CONFIRM_BUTTON = "確定 (OK)";
@@ -130,7 +148,7 @@ export function updateFailureDialog(
   };
 }
 
-const UPDATE_REPAIR_MESSAGES: Record<RelaunchRepairReason, BilingualText> = {
+const UPDATE_REPAIR_MESSAGES: Record<UpdateRepairReason, BilingualText> = {
   missing: {
     zhTW: "更新後的首次啟動找不到完成標記，無法確認此次安裝成功。此程式沒有自動回復功能，請以手動方式重新下載並安裝最新版本。",
     en: "The completed-install marker was not found after the update, so this installation cannot be confirmed. There is no automatic rollback; download and install the latest version manually.",
@@ -139,10 +157,14 @@ const UPDATE_REPAIR_MESSAGES: Record<RelaunchRepairReason, BilingualText> = {
     zhTW: "更新完成標記無效，無法確認此次安裝成功。此程式沒有自動回復功能，請以手動方式重新下載並安裝最新版本。",
     en: "The completed-install marker is invalid, so this installation cannot be confirmed. There is no automatic rollback; download and install the latest version manually.",
   },
+  unconfirmed: {
+    zhTW: "上次的更新在安裝階段未能完成，無法確認是否已套用。此程式沒有自動回復功能，請以手動方式重新下載並安裝最新版本。",
+    en: "The previous update did not finish installing, so it cannot be confirmed whether it was applied. There is no automatic rollback; download and install the latest version manually.",
+  },
 };
 
 export function updateRepairDialog(
-  reason: RelaunchRepairReason,
+  reason: UpdateRepairReason,
 ): UpdateGuidanceDialogContent {
   const body = UPDATE_REPAIR_MESSAGES[reason];
   return {

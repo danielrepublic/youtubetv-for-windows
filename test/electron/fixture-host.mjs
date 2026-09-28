@@ -21,6 +21,12 @@ import { startHost } from "../../dist/main/app.js";
 import { createProfileDiagnostics } from "../../dist/main/diagnostics.js";
 import { createMemoryEtagCache } from "../../dist/main/update/discovery.js";
 import { runPreWindowStage } from "../../dist/main/update/startup.js";
+import { classifyUpdateRecovery } from "../../dist/main/update/recovery.js";
+import {
+  showUpdateGuidance,
+  updateRepairDialog,
+} from "../../dist/main/dialogs.js";
+import { resolveUpdateDirectoryConvention } from "../../dist/main/profile-path.js";
 import { IDENTITY_PARTITION } from "../../dist/main/session.js";
 import { assertIdentityPolicy } from "../../dist/main/user-agent.js";
 import { buildWindowOptions } from "../../dist/main/window.js";
@@ -186,6 +192,9 @@ async function main() {
 //   diagnostics  --page-url (with secret query), --diagnostics-base,
 //                --auth-origin, --popup-url, --fail-url (optional),
 //                --dialog-script (optional)
+//   update        --feed-dir, --base-dir, --page-url
+//   update-recovery --base-dir, --launch-nonce (optional),
+//                --current-version (optional), --dialog-script (optional)
 
 function createPolicyRecorders() {
   const externalCalls = [];
@@ -249,6 +258,8 @@ async function runPolicyScenario(name) {
     await runDiagnosticsScenario();
   } else if (name === "update") {
     await runUpdateScenario();
+  } else if (name === "update-recovery") {
+    await runUpdateRecoveryScenario();
   } else {
     throw new Error(`fixture-host: unknown scenario ${name}`);
   }
@@ -742,6 +753,11 @@ async function runUpdateScenario() {
   );
 
   const pendingRoot = path.join(updateBase, "pending");
+  const statusDirectory = path.join(
+    baseDir,
+    "youtubetv-for-windows",
+    "update-status",
+  );
   report({
     event: "update-result",
     hostStarted: host !== null,
@@ -755,6 +771,100 @@ async function runUpdateScenario() {
     pendingDirectories: fs.existsSync(pendingRoot)
       ? fs.readdirSync(pendingRoot)
       : [],
+    pendingRoot,
+    statusDirectory,
+    statusEntries: fs.existsSync(statusDirectory)
+      ? fs.readdirSync(statusDirectory)
+      : [],
+  });
+}
+
+// Pre-window terminal-outcome recovery: drives the REAL classification
+// (`classifyUpdateRecovery`) against the REAL per-user directory convention
+// derived from a profile directory, and presents the REAL bilingual guidance
+// through a recording presenter. This is the same composition the app entry
+// runs before any window exists, so a launch after a completed install, and a
+// launch after an installer that aborted or died, are both executable here.
+//
+// It deliberately creates NO window and runs NO update check: the recovery
+// decision is a pre-window concern, and the ordering guarantee that no window
+// exists before it is pinned by the `update` scenario above.
+//
+//   --base-dir         per-user base holding youtubetv-for-windows/
+//   --launch-nonce     the nonce the installer relaunched us with, if any
+//   --current-version  the running executable's version (default 1.0.0)
+async function runUpdateRecoveryScenario() {
+  const baseDir = paramValue("base-dir");
+  if (baseDir === undefined) {
+    throw new Error("fixture-host update-recovery: --base-dir is required");
+  }
+  const profileDirectory = path.join(
+    baseDir,
+    "youtubetv-for-windows",
+    "profile",
+  );
+  fs.mkdirSync(profileDirectory, { recursive: true });
+  const updateDirectories = resolveUpdateDirectoryConvention(profileDirectory);
+  const pendingRoot = path.join(
+    updateDirectories.updateBaseDirectory,
+    "pending",
+  );
+  const launchNonce = paramValue("launch-nonce") ?? null;
+  const currentVersion = paramValue("current-version") ?? "1.0.0";
+
+  const before = {
+    pendingDirectories: fs.existsSync(pendingRoot)
+      ? fs.readdirSync(pendingRoot)
+      : [],
+    statusEntries: fs.existsSync(updateDirectories.statusDirectory)
+      ? fs.readdirSync(updateDirectories.statusDirectory)
+      : [],
+  };
+
+  const dialogOptions = [];
+  const externalCalls = [];
+  const classification = classifyUpdateRecovery({
+    statusDirectory: updateDirectories.statusDirectory,
+    updateBaseDirectory: updateDirectories.updateBaseDirectory,
+    launchNonce,
+    currentVersion,
+  });
+  if (classification.kind === "repair") {
+    await showUpdateGuidance(
+      {
+        showMessageBox: async (options) => {
+          dialogOptions.push(options);
+          return { response: 1 };
+        },
+      },
+      updateRepairDialog(classification.reason),
+      () => {
+        externalCalls.push("open-download-page");
+      },
+    );
+  }
+
+  report({
+    event: "update-recovery-result",
+    classification,
+    launchNonce,
+    currentVersion,
+    windowCount: BrowserWindow.getAllWindows().length,
+    dialogCount: dialogOptions.length,
+    dialogTitle: dialogOptions.length > 0 ? dialogOptions[0].title : null,
+    dialogMessage: dialogOptions.length > 0 ? dialogOptions[0].message : null,
+    dialogDetail: dialogOptions.length > 0 ? dialogOptions[0].detail : null,
+    dialogButtons: dialogOptions.length > 0 ? dialogOptions[0].buttons : null,
+    externalCalls,
+    before,
+    after: {
+      pendingDirectories: fs.existsSync(pendingRoot)
+        ? fs.readdirSync(pendingRoot)
+        : [],
+      statusEntries: fs.existsSync(updateDirectories.statusDirectory)
+        ? fs.readdirSync(updateDirectories.statusDirectory)
+        : [],
+    },
   });
 }
 

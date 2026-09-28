@@ -25,9 +25,16 @@
  *   - `failed`       -> show the bilingual pre-install guidance, then launch
  *                       the installed version.
  *   - `update-ready` -> RE-VERIFY the pending installer from the exact path,
- *                       spawn it detached with the silent flag, the parent
- *                       PID and the nonce, then request the quit that skips
- *                       window creation entirely.
+ *                       durably record the attempt, spawn the installer
+ *                       detached with the silent flag, the parent PID and the
+ *                       nonce, then request the quit that skips window
+ *                       creation entirely.
+ *
+ * Terminal outcomes delete the pending installer, with exactly one exception
+ * that is a protocol requirement rather than a leak: after a SUCCESSFUL spawn
+ * the file must survive, because that is the path the installer executes from.
+ * Its terminal outcome is therefore observed on a LATER launch, which
+ * classifies the recorded attempt and reclaims the copy (`recovery.ts`).
  *
  * The whole check is wrapped in ONE bounded overall budget. Expiry is a
  * classified skip: the installed version launches, and a pending directory
@@ -54,6 +61,7 @@ import { verifyInstallerFile } from "./installer.ts";
 import type { UpdateKeyring } from "./keyring.ts";
 import { resolveUpdateLimits, type UpdateLimits } from "./limits.ts";
 import { removePendingDirectory } from "./pending.ts";
+import { discardUpdateAttemptRecord, recordUpdateAttempt } from "./recovery.ts";
 
 /**
  * One budget for the complete stage (discovery + manifest/signature +
@@ -292,6 +300,19 @@ export async function runPreWindowStage(
         return { action: "launch", reason: "failed" };
       }
 
+      // Record the attempt BEFORE the spawn. The launcher quits immediately
+      // after a successful spawn and nothing ever observes the installer's
+      // exit status, so this record is the only durable evidence that an
+      // update was started; it is what lets a later launch classify a failed
+      // installer or a nonzero exit (see `recovery.ts`). It is a recovery
+      // aid, not a trust input, so a write failure is not allowed to block a
+      // handoff of an already verified installer.
+      recordUpdateAttempt({
+        statusDirectory: directories.statusDirectory,
+        nonce: result.nonce,
+        version: result.manifest.version,
+      });
+
       const spawned = options.spawnInstaller(
         result.installerPath,
         installerArguments(options.processId, result.nonce),
@@ -302,6 +323,9 @@ export async function runPreWindowStage(
         // After a SUCCESSFUL spawn the file must NOT be deleted: the
         // installer executes from that exact path.
         removePendingDirectory(path.dirname(result.installerPath));
+        // No handoff happened, so no attempt may be left on record: a later
+        // launch must not be told an update failed when none was ever run.
+        discardUpdateAttemptRecord(directories.statusDirectory, result.nonce);
         options.report({ event: "update-spawn-failed" });
         await showFailureGuidance(options, "installer-launch-failed");
         return { action: "launch", reason: "failed" };

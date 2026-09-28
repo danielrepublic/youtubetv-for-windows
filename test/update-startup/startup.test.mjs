@@ -46,7 +46,13 @@ const {
 const { successMarkerPath, verifyAndConsumeSuccessMarker } =
   await import("../../src/main/update/relaunch.ts");
 const { updateHomePaths } = await import("../../src/main/update/pending.ts");
-const { SUPPORT_RELEASE_URL } = await import("../../src/main/dialogs.ts");
+const {
+  UPDATE_ATTEMPT_RECORD_EXTENSION,
+  UPDATE_ATTEMPT_RECORD_PREFIX,
+  classifyUpdateRecovery,
+} = await import("../../src/main/update/recovery.ts");
+const { SUPPORT_RELEASE_URL, updateRepairDialog } =
+  await import("../../src/main/dialogs.ts");
 
 const PROFILE_PARENT_NAME = "youtubetv-for-windows";
 const PROCESS_ID = 4242;
@@ -84,6 +90,7 @@ function createStage(t, fixture) {
   const profileDirectory = path.join(root, PROFILE_PARENT_NAME, "profile");
   fs.mkdirSync(profileDirectory, { recursive: true });
   const updateBase = path.join(root, PROFILE_PARENT_NAME, "updates");
+  const statusDirectory = path.join(root, PROFILE_PARENT_NAME, "update-status");
   const paths = updateHomePaths(updateBase);
 
   const calls = {
@@ -101,8 +108,51 @@ function createStage(t, fixture) {
     root,
     profileDirectory,
     updateBase,
+    statusDirectory,
     paths,
     state: () => readUpdateState(updateBase),
+    attemptRecords: () =>
+      fs.existsSync(statusDirectory)
+        ? fs
+            .readdirSync(statusDirectory)
+            .filter((entry) => entry.startsWith(UPDATE_ATTEMPT_RECORD_PREFIX))
+            .sort()
+        : [],
+    attemptRecordPath: (nonce) =>
+      path.join(
+        statusDirectory,
+        `${UPDATE_ATTEMPT_RECORD_PREFIX}${nonce}${UPDATE_ATTEMPT_RECORD_EXTENSION}`,
+      ),
+    /** The nonces the launcher handed to the installer, in order. */
+    handoffNonces: () =>
+      stage.calls.spawn.map((call) => {
+        const match = /--update-nonce=([0-9a-f]{32})$/.exec(call.arguments[2]);
+        assert.ok(match, `unexpected nonce: ${call.arguments[2]}`);
+        return match[1];
+      }),
+    /** The single nonce the launcher handed to the installer. */
+    handoffNonce: () => {
+      const nonces = stage.handoffNonces();
+      assert.equal(nonces.length, 1, "expected exactly one handoff");
+      return nonces[0];
+    },
+    /** Runs the next launch's terminal-outcome classification. */
+    recover: (launchNonce, currentVersion = "1.0.0") =>
+      classifyUpdateRecovery({
+        statusDirectory,
+        updateBaseDirectory: updateBase,
+        launchNonce,
+        currentVersion,
+      }),
+    /** Writes what a successful NSIS install publishes before relaunching. */
+    publishSuccessMarker: (nonce) => {
+      fs.mkdirSync(statusDirectory, { recursive: true });
+      fs.writeFileSync(
+        successMarkerPath(statusDirectory, nonce),
+        JSON.stringify({ nonce }),
+        "utf8",
+      );
+    },
     setDialogResponse(value) {
       dialogResponse = value;
     },
@@ -209,6 +259,165 @@ test("update-ready re-verifies the pending path, spawns detached, and quits", as
     fixture.calls.filter((call) => call.url === RELEASES_LATEST_URL).length,
     1,
   );
+});
+
+test("the handoff durably records the attempt, because nothing observes the installer's exit", async (t) => {
+  // The launcher quits immediately after the spawn and the installer is
+  // detached with its streams ignored, so no process ever learns whether it
+  // succeeded. The attempt record written immediately BEFORE the spawn is the
+  // only durable evidence that an update was started, and it is what makes a
+  // failed installer or a nonzero exit classifiable on a later launch.
+  const fixture = buildScenario();
+  const stage = createStage(t, fixture);
+
+  await stage.run();
+
+  const nonce = stage.handoffNonce();
+  assert.deepEqual(stage.attemptRecords(), [
+    `${UPDATE_ATTEMPT_RECORD_PREFIX}${nonce}${UPDATE_ATTEMPT_RECORD_EXTENSION}`,
+  ]);
+  assert.deepEqual(
+    JSON.parse(fs.readFileSync(stage.attemptRecordPath(nonce), "utf8")),
+    { nonce, version: fixture.manifest.version },
+    "the record carries the SIGNED manifest target version",
+  );
+});
+
+test("an installer that never relaunches is classified and its copy is reclaimed", async (t) => {
+  // D1: the installer aborted in .onInit (a bad handoff, or the parent-wait
+  // timeout) or died part-way through replacing files. It published no
+  // receipt and never relaunched the app, and the OLD version is still what is
+  // installed, so the next ordinary launch must classify the attempt and tell
+  // the user, instead of silently accepting a half-installed tree forever.
+  const fixture = buildScenario();
+  const stage = createStage(t, fixture);
+
+  const decision = await stage.run();
+  assert.deepEqual(decision, { action: "quit", reason: "update-ready" });
+  const nonce = stage.handoffNonce();
+  assert.deepEqual(
+    stage.state().pendingDirectories,
+    [nonce],
+    "the installer executes from that copy, so it survives the handoff",
+  );
+
+  const recovery = stage.recover(null, fixture.currentVersion);
+
+  assert.equal(recovery.kind, "repair");
+  assert.equal(recovery.reason, "unconfirmed");
+  assert.deepEqual(recovery.nonces, [nonce]);
+  const dialog = updateRepairDialog(recovery.reason);
+  assert.match(
+    dialog.message,
+    /[\u4e00-\u9fff]/,
+    "missing Traditional Chinese",
+  );
+  assert.match(dialog.message, /cannot be confirmed/);
+  assert.match(dialog.message, /manually/);
+  assert.equal(dialog.detail, SUPPORT_RELEASE_URL);
+  assert.doesNotMatch(
+    dialog.message,
+    /rolled back|restored|已回復|已還原/,
+    "the message must never promise recovery the design cannot provide",
+  );
+  assert.deepEqual(
+    stage.state().pendingDirectories,
+    [],
+    "a copy no installer will ever run again is reclaimed",
+  );
+  assert.deepEqual(stage.attemptRecords(), [], "the record is consumed");
+  assert.deepEqual(
+    stage.recover(null, fixture.currentVersion),
+    { kind: "none" },
+    "one failed attempt produces at most one message",
+  );
+});
+
+test("a completed install is confirmed and its installer copy is reclaimed", async (t) => {
+  // D2: the successful handoff. The installer's receipt is the authority, and
+  // because the installer has finished reading the pending file the copy can
+  // finally be reclaimed. Before the fix nothing ever reclaimed it, so every
+  // successful update leaked a full installer copy.
+  const fixture = buildScenario();
+  const stage = createStage(t, fixture);
+
+  await stage.run();
+  const nonce = stage.handoffNonce();
+  assert.equal(
+    stage.attemptRecords().length,
+    1,
+    "the attempt is still unconfirmed at handoff time",
+  );
+  stage.publishSuccessMarker(nonce);
+
+  const recovery = stage.recover(nonce, fixture.manifest.version);
+
+  assert.deepEqual(recovery, { kind: "confirmed", nonce });
+  assert.deepEqual(
+    stage.state().pendingDirectories,
+    [],
+    "the terminal outcome deletes the pending installer",
+  );
+  assert.deepEqual(stage.attemptRecords(), []);
+  assert.equal(
+    fs.existsSync(successMarkerPath(stage.statusDirectory, nonce)),
+    false,
+    "the one-shot receipt is consumed",
+  );
+});
+
+test("consecutive handoffs never accumulate installer copies", async (t) => {
+  // Two successful handoffs in the same pending tree, each reclaimed by the
+  // launch that resolved it. The pre-fix tree left both copies behind forever.
+  const fixture = buildScenario();
+  const stage = createStage(t, fixture);
+  await stage.run();
+  const second = buildScenario();
+  t.after(() => second.cleanup());
+
+  await stage.run({
+    transport: second.transport,
+    keyring: second.keyring,
+    etagCache: second.etagCache,
+    now: second.now,
+    limits: second.limits,
+  });
+
+  const [firstNonce, secondNonce] = stage.handoffNonces();
+  assert.notEqual(firstNonce, secondNonce);
+  assert.deepEqual(
+    stage.state().pendingDirectories,
+    [firstNonce, secondNonce].sort(),
+    "each handoff leaves exactly its own copy",
+  );
+  const copiesBefore = stage
+    .state()
+    .pendingDirectories.map((nonce) =>
+      fs.readdirSync(path.join(stage.paths.pendingRoot, nonce)),
+    );
+  assert.deepEqual(
+    copiesBefore,
+    [
+      [second.manifest.installerAssetName],
+      [fixture.manifest.installerAssetName],
+    ],
+    "each pending directory holds a full installer copy",
+  );
+
+  for (const nonce of [firstNonce, secondNonce]) {
+    stage.publishSuccessMarker(nonce);
+    assert.deepEqual(stage.recover(nonce, "2.0.0"), {
+      kind: "confirmed",
+      nonce,
+    });
+  }
+
+  assert.deepEqual(
+    stage.state().pendingDirectories,
+    [],
+    "the pending tree is empty again: no copy is orphaned",
+  );
+  assert.deepEqual(stage.attemptRecords(), []);
 });
 
 test("up-to-date launches the installed version silently", async (t) => {
@@ -381,6 +590,12 @@ test("a spawn failure deletes the pending installer and falls back", async (t) =
   assert.equal(stage.calls.quit, 0);
   assert.deepEqual(stage.state().pendingDirectories, []);
   assert.equal(stage.state().lockExists, false);
+  assert.deepEqual(
+    stage.attemptRecords(),
+    [],
+    "an installer that never ran leaves no attempt on record, so no later " +
+      "launch is told an update failed when none was ever started",
+  );
   assertBilingual(stage.calls.dialogs[0]);
   assert.match(
     stage.calls.dialogs[0].message,
