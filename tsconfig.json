@@ -13,6 +13,7 @@
     "noUnusedParameters": true,
     "forceConsistentCasingInFileNames": true,
     "esModuleInterop": true,
+    "allowImportingTsExtensions": true,
     "skipLibCheck": true,
     "sourceMap": true,
     "types": ["node"]

@@ -132,6 +132,13 @@ therefore has two emitters:
 Do not "simplify" the preload to a single ESM config; todo 2's preload would
 then fail to load while every other test still passed.
 
+Local TypeScript imports use explicit `.ts` specifiers (e.g.
+`import { x } from "./foo.ts"`); unit tests may import `src/**/*.ts` directly
+because Node 24 type-strips TS, emit rewrites specifiers to `.js` via
+`rewriteRelativeImportExtensions`, and TS sources must stay
+erasable-syntax-only (no `enum`, no `namespace`, no parameter properties)
+because type stripping cannot transform those.
+
 ## Artifact verification (`verify:artifacts`)
 
 `scripts/verify-artifacts.cjs` is fail-closed and derives everything it reports

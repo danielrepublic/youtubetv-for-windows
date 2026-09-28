@@ -1,6 +1,7 @@
 {
   "extends": "./tsconfig.json",
   "compilerOptions": {
+    "rewriteRelativeImportExtensions": true,
     "module": "commonjs",
     "moduleResolution": "node",
     "rootDir": "src",
