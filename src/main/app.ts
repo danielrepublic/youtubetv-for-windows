@@ -1,3 +1,10 @@
+import type { DialogPresenter } from "./dialogs.ts";
+import {
+  installNavigationPolicy,
+  type ExternalOpener,
+  type NavigationPolicyContents,
+} from "./navigation-policy.ts";
+import { installPopupPolicy, type PopupPolicyHost } from "./popup-policy.ts";
 import { activateIdentityPolicy } from "./session.ts";
 import type { IdentityPolicySession } from "./session.ts";
 import { assertIdentityPolicy } from "./user-agent.ts";
@@ -38,6 +45,16 @@ export interface StartedHost {
   headerInterceptionActive: boolean;
 }
 
+// Policy dependencies injected by the production entry (or the fixture
+// host): the OS-browser opener and the route-failure dialog presenter plus
+// the popup allowlist. Kept injected (never imported from Electron here) so
+// startHost stays unit-testable and tests can record every delegation.
+export interface HostPolicyDeps {
+  opener: ExternalOpener;
+  presenter: DialogPresenter;
+  authOrigins?: readonly string[];
+}
+
 // Seam for todo 6: the pre-window update stage runs here, after the identity
 // policy is active and before any window is created. Currently intentionally
 // a no-op; todo 6 inserts its launcher/update check at this call site.
@@ -60,11 +77,13 @@ export function attachFullscreenToggle(window: HostWindow): void {
 
 // Composition root: activate the fixed identity first, assert it, run the
 // pre-window stage, then create the (validated, fullscreen, sandboxed)
-// window and load the target exactly once. The target never loads unless the
-// identity policy activated successfully.
+// window, install the navigation + popup policies when policy dependencies
+// are provided, and load the target exactly once. The target never loads
+// unless the identity policy activated successfully.
 export async function startHost(
   runtime: HostRuntime,
   targetUrl: string,
+  policies?: HostPolicyDeps,
 ): Promise<StartedHost> {
   const evidence = activateIdentityPolicy(runtime.session);
   assertIdentityPolicy(evidence.userAgent);
@@ -72,6 +91,20 @@ export async function startHost(
   const options = buildWindowOptions(runtime.appPath);
   const window = runtime.createWindow(options);
   attachFullscreenToggle(window);
+  if (policies !== undefined) {
+    installNavigationPolicy(
+      window.webContents as unknown as NavigationPolicyContents,
+      {
+        targetUrl,
+        opener: policies.opener,
+        presenter: policies.presenter,
+      },
+    );
+    installPopupPolicy(window.webContents as unknown as PopupPolicyHost, {
+      opener: policies.opener,
+      authOrigins: policies.authOrigins,
+    });
+  }
   await window.loadURL(targetUrl);
   return {
     window,

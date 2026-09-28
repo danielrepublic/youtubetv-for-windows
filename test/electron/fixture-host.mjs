@@ -14,17 +14,42 @@
 
 import { app, BrowserWindow, session } from "electron";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { startHost } from "../../dist/main/app.js";
 import { IDENTITY_PARTITION } from "../../dist/main/session.js";
 import { assertIdentityPolicy } from "../../dist/main/user-agent.js";
 import { buildWindowOptions } from "../../dist/main/window.js";
+import { installNavigationPolicy } from "../../dist/main/navigation-policy.js";
+import { installPopupPolicy } from "../../dist/main/popup-policy.js";
+import { activateProfileDirectory } from "../../dist/main/profile-path.js";
 
 const rawArguments = process.argv.slice(1);
 const targetUrl = rawArguments.find((entry) => entry.startsWith("http"));
 const mutatedMode = rawArguments.includes("--mutated");
 const visibleMode = rawArguments.includes("--show");
+
+function paramValue(name) {
+  const prefix = `--${name}=`;
+  const found = rawArguments.find((entry) => entry.startsWith(prefix));
+  return found === undefined ? undefined : found.slice(prefix.length);
+}
+
+function paramList(name) {
+  const prefix = `--${name}=`;
+  return rawArguments
+    .filter((entry) => entry.startsWith(prefix))
+    .map((entry) => entry.slice(prefix.length));
+}
+
+function scenarioName() {
+  return paramValue("scenario");
+}
+
+function repositoryRootFromHere() {
+  return path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
+}
 
 function report(record) {
   process.stdout.write(`${JSON.stringify(record)}\n`);
@@ -131,10 +156,377 @@ async function runHostScenario() {
 async function main() {
   if (mutatedMode) {
     await runMutatedGate();
+  } else if (scenarioName() !== undefined) {
+    await runPolicyScenario(scenarioName());
   } else {
     await runHostScenario();
   }
   report({ event: "done" });
+}
+
+// ---- Todo-3 policy scenarios -------------------------------------------
+//
+// Each scenario drives the COMPILED production policy modules against real
+// BrowserWindows and local fixture URLs, with a recording openExternal and
+// a scripted dialog presenter (no human, no real shell, no network beyond
+// 127.0.0.1). Passive event taps record which Electron events fired so the
+// node-side suite can assert the mechanism, not just the outcome.
+//
+// Scenarios (selected by --scenario=NAME, params as --name=value):
+//   nav          --page-url, repeatable --go, --auth-origin (optional)
+//   popup        --page-url, --auth-origin, --popup-url, --child-go (optional),
+//                --cookie-name/--cookie-value (optional, allow path only)
+//   route        --page-url (off-route), --dialog-script (csv of indexes)
+//   loadfail     --page-url (unreachable), --dialog-script
+//   profile      --profile-base, --mode=set|get, --cookie-url,
+//                --cookie-name, --cookie-value
+
+function createPolicyRecorders() {
+  const externalCalls = [];
+  const dialogOptions = [];
+  return {
+    externalCalls,
+    dialogOptions,
+    opener: {
+      openExternal: (url) => {
+        externalCalls.push(url);
+      },
+    },
+    presenterFromScript: (script) => ({
+      showMessageBox: async (options) => {
+        dialogOptions.push(options);
+        const next = script.length > 0 ? script.shift() : 2;
+        return { response: next };
+      },
+    }),
+  };
+}
+
+function parseDialogScript() {
+  const raw = paramValue("dialog-script");
+  if (raw === undefined || raw === "") {
+    return [2];
+  }
+  return raw.split(",").map((entry) => Number(entry));
+}
+
+function tapPolicyEvents(contents, navigationEvents) {
+  contents.on("will-navigate", (_event, url) => {
+    navigationEvents.push(`will-navigate:${url}`);
+  });
+  contents.on("will-redirect", (_event, url) => {
+    navigationEvents.push(`will-redirect:${url}`);
+  });
+  contents.on("did-finish-load", () => {
+    navigationEvents.push("did-finish-load");
+  });
+  contents.on(
+    "did-fail-load",
+    (_event, code, _description, url, isMainFrame) => {
+      navigationEvents.push(`did-fail-load:${code}:${isMainFrame}:${url}`);
+    },
+  );
+}
+
+async function runPolicyScenario(name) {
+  if (name === "nav") {
+    await runNavScenario();
+  } else if (name === "popup") {
+    await runPopupScenario();
+  } else if (name === "route") {
+    await runRouteScenario();
+  } else if (name === "loadfail") {
+    await runLoadfailScenario();
+  } else if (name === "profile") {
+    await runProfileScenario();
+  } else {
+    throw new Error(`fixture-host: unknown scenario ${name}`);
+  }
+}
+
+// Unexpected main-window navigation: the fixture page is loaded first, the
+// production navigation policy is installed, then each --go target is driven
+// through renderer-initiated location.href (the will-navigate path).
+async function runNavScenario() {
+  const pageUrl = paramValue("page-url");
+  const goUrls = paramList("go");
+  if (pageUrl === undefined) {
+    throw new Error("fixture-host nav: --page-url is required");
+  }
+  const repositoryRoot = repositoryRootFromHere();
+  const recorders = createPolicyRecorders();
+  const navigationEvents = [];
+  const window = new BrowserWindow({
+    ...buildWindowOptions(repositoryRoot),
+    show: false,
+  });
+  await window.loadURL(pageUrl);
+  tapPolicyEvents(window.webContents, navigationEvents);
+  installNavigationPolicy(window.webContents, {
+    targetUrl: pageUrl,
+    opener: recorders.opener,
+    presenter: recorders.presenterFromScript(parseDialogScript()),
+  });
+  const results = [];
+  for (const go of goUrls) {
+    const externalBefore = recorders.externalCalls.length;
+    const urlBefore = window.webContents.getURL();
+    await window.webContents.executeJavaScript(
+      `location.href = ${JSON.stringify(go)}`,
+    );
+    await sleep(900);
+    results.push({
+      go,
+      urlBefore,
+      urlAfter: window.webContents.getURL(),
+      newExternal: recorders.externalCalls.slice(externalBefore),
+    });
+  }
+  report({
+    event: "nav-results",
+    results,
+    externalCalls: recorders.externalCalls,
+    navigationEvents,
+    dialogOptions: recorders.dialogOptions,
+  });
+}
+
+// Popup lifecycle: window.open through the production popup policy with the
+// injected local auth origin. Reports child creation, session identity,
+// cookie visibility, renderer privilege, and external delegation.
+async function runPopupScenario() {
+  const pageUrl = paramValue("page-url");
+  const authOrigin = paramValue("auth-origin");
+  const popupUrl = paramValue("popup-url");
+  const childGo = paramValue("child-go");
+  const cookieName = paramValue("cookie-name");
+  const cookieValue = paramValue("cookie-value");
+  if (
+    pageUrl === undefined ||
+    authOrigin === undefined ||
+    popupUrl === undefined
+  ) {
+    throw new Error(
+      "fixture-host popup: --page-url, --auth-origin and --popup-url are required",
+    );
+  }
+  const repositoryRoot = repositoryRootFromHere();
+  const recorders = createPolicyRecorders();
+  const navigationEvents = [];
+  const electronSession = session.fromPartition(IDENTITY_PARTITION);
+  const window = new BrowserWindow({
+    ...buildWindowOptions(repositoryRoot),
+    show: false,
+  });
+  await window.loadURL(pageUrl);
+  tapPolicyEvents(window.webContents, navigationEvents);
+  let createdWindows = 0;
+  window.webContents.on("did-create-window", () => {
+    createdWindows += 1;
+  });
+  installPopupPolicy(window.webContents, {
+    opener: recorders.opener,
+    authOrigins: [authOrigin],
+  });
+  if (cookieName !== undefined && cookieValue !== undefined) {
+    await electronSession.cookies.set({
+      url: popupUrl,
+      name: cookieName,
+      value: cookieValue,
+      // A persistent cookie: session cookies never reach the disk store,
+      // so without an expiry the sharing probe would still pass in-process
+      // while teaching nothing about persistence.
+      expirationDate: Math.floor(Date.now() / 1000) + 86400 * 365,
+    });
+  }
+  // window.open returns a WindowProxy, which executeJavaScript cannot
+  // serialize back; drive it for side effects only and resolve undefined.
+  const openOutcome = await window.webContents.executeJavaScript(
+    `(function () { const child = window.open(${JSON.stringify(popupUrl)}, "_blank"); return { returnedNull: child === null, closed: child !== null && child.closed }; })()`,
+  );
+  await sleep(2000);
+  // Popups arrive as top-level windows (getChildWindows stays empty even
+  // though did-create-window fires on the opener), so the child is
+  // identified as any live window beyond the opener itself.
+  const childWindows = window.getChildWindows();
+  const allWindows = BrowserWindow.getAllWindows().filter(
+    (entry) => entry !== window && !entry.isDestroyed(),
+  );
+  const child = allWindows[0];
+  let sessionSame = false;
+  let childUrl = null;
+  let privilege = null;
+  let cookie = null;
+  if (child !== undefined) {
+    sessionSame = child.webContents.session === electronSession;
+    childUrl = child.webContents.getURL();
+    tapPolicyEvents(child.webContents, navigationEvents);
+    privilege = await child.webContents.executeJavaScript(
+      "({ requireType: typeof require, processType: typeof process })",
+    );
+    cookie = await child.webContents.executeJavaScript("document.cookie");
+  }
+  report({
+    event: "popup-result",
+    childCount: childWindows.length,
+    popupCount: allWindows.length,
+    createdWindows,
+    openOutcome,
+    sessionSame,
+    childUrl,
+    privilege,
+    cookie,
+    externalCalls: recorders.externalCalls,
+    navigationEvents,
+  });
+  // Optional second phase: redirect the allowed child somewhere disallowed.
+  // The guard must close it and delegate externally for valid https:.
+  if (childGo !== undefined && child !== undefined && !child.isDestroyed()) {
+    const externalBefore = recorders.externalCalls.length;
+    await child.webContents.executeJavaScript(
+      `location.href = ${JSON.stringify(childGo)}`,
+    );
+    await sleep(1500);
+    report({
+      event: "child-redirect",
+      destroyed: child.isDestroyed(),
+      remainingPopups: BrowserWindow.getAllWindows().filter(
+        (entry) => entry !== window && !entry.isDestroyed(),
+      ).length,
+      newExternal: recorders.externalCalls.slice(externalBefore),
+      navigationEvents,
+    });
+  }
+}
+
+// Redirected-away TV route: loads an off-route page with the navigation
+// policy installed so did-finish-load enters the bounded bilingual
+// recovery driven by the scripted dialog. --target-url selects the recovery
+// reload target (tests pass a local page so retries re-land off-route and
+// no live network is touched; production passes the TV URL).
+async function runRouteScenario() {
+  const pageUrl = paramValue("page-url");
+  const targetUrl = paramValue("target-url") ?? "https://www.youtube.com/tv";
+  if (pageUrl === undefined) {
+    throw new Error("fixture-host route: --page-url is required");
+  }
+  const repositoryRoot = repositoryRootFromHere();
+  const recorders = createPolicyRecorders();
+  const navigationEvents = [];
+  const window = new BrowserWindow({
+    ...buildWindowOptions(repositoryRoot),
+    show: false,
+  });
+  tapPolicyEvents(window.webContents, navigationEvents);
+  installNavigationPolicy(window.webContents, {
+    targetUrl,
+    opener: recorders.opener,
+    presenter: recorders.presenterFromScript(parseDialogScript()),
+  });
+  const loadError = await window.loadURL(pageUrl).then(
+    () => null,
+    (error) => String(error?.message ?? error),
+  );
+  await sleep(2500);
+  report({
+    event: "route-result",
+    loadError,
+    currentUrl: window.webContents.isDestroyed()
+      ? null
+      : window.webContents.getURL(),
+    dialogOptions: recorders.dialogOptions,
+    externalCalls: recorders.externalCalls,
+    navigationEvents,
+  });
+}
+
+// Load failure: the target is unreachable, so the main-frame did-fail-load
+// enters the same bilingual recovery. --target-url selects the recovery
+// reload target (see runRouteScenario).
+async function runLoadfailScenario() {
+  const pageUrl = paramValue("page-url");
+  const targetUrl = paramValue("target-url") ?? "https://www.youtube.com/tv";
+  if (pageUrl === undefined) {
+    throw new Error("fixture-host loadfail: --page-url is required");
+  }
+  const repositoryRoot = repositoryRootFromHere();
+  const recorders = createPolicyRecorders();
+  const navigationEvents = [];
+  const window = new BrowserWindow({
+    ...buildWindowOptions(repositoryRoot),
+    show: false,
+  });
+  tapPolicyEvents(window.webContents, navigationEvents);
+  installNavigationPolicy(window.webContents, {
+    targetUrl,
+    opener: recorders.opener,
+    presenter: recorders.presenterFromScript(parseDialogScript()),
+  });
+  const loadError = await window.loadURL(pageUrl).then(
+    () => null,
+    (error) => String(error?.message ?? error),
+  );
+  await sleep(2500);
+  report({
+    event: "loadfail-result",
+    loadError,
+    dialogOptions: recorders.dialogOptions,
+    externalCalls: recorders.externalCalls,
+    navigationEvents,
+  });
+}
+
+// Persistent profile: activates the production profile path (real
+// app.setPath) before opening the persistent session, then sets or reads a
+// cookie. The node suite spawns this twice against the SAME base directory
+// to prove persistence, and once against a file path to prove fallback.
+async function runProfileScenario() {
+  const profileBase = paramValue("profile-base");
+  const mode = paramValue("mode") ?? "get";
+  const cookieUrl = paramValue("cookie-url");
+  const cookieName = paramValue("cookie-name") ?? "ytv_profile_probe";
+  const cookieValue = paramValue("cookie-value") ?? "probe-value";
+  if (profileBase === undefined || cookieUrl === undefined) {
+    throw new Error(
+      "fixture-host profile: --profile-base and --cookie-url are required",
+    );
+  }
+  const activation = activateProfileDirectory({
+    localAppDataDir: profileBase,
+    appDataDir: path.join(os.tmpdir(), "ytv-profile-should-not-appear"),
+    setSessionDataPath: (directory) => {
+      app.setPath("sessionData", directory);
+    },
+  });
+  report({
+    event: "profile-activation",
+    directory: activation.directory,
+    usedFallback: activation.usedFallback,
+    guidance: activation.guidance,
+  });
+  const electronSession = session.fromPartition(IDENTITY_PARTITION);
+  if (mode === "set") {
+    await electronSession.cookies.set({
+      url: cookieUrl,
+      name: cookieName,
+      value: cookieValue,
+      // Persistent across relaunch: a session cookie would never be
+      // written to the profile's cookie store, even with flushStore.
+      expirationDate: Math.floor(Date.now() / 1000) + 86400 * 365,
+    });
+    await electronSession.cookies.flushStore();
+    report({ event: "cookie-written", name: cookieName, value: cookieValue });
+  } else {
+    const found = await electronSession.cookies.get({
+      url: cookieUrl,
+      name: cookieName,
+    });
+    report({
+      event: "cookie-read",
+      name: cookieName,
+      value: found.length > 0 ? found[0].value : null,
+    });
+  }
 }
 
 // No top-level await: awaiting the entry module's top-level promise blocks
