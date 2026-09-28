@@ -1,0 +1,7 @@
+# Reproducible working-tree line endings.
+#
+# core.autocrlf=true is the default on many Windows Git installations; without
+# this file a fresh clone checks out CRLF and `npm run format:check` fails in
+# every clone even though the committed blobs are LF. Force LF in the working
+# tree for all text files so the formatter gate is clone-stable.
+* text=auto eol=lf

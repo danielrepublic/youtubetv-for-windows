@@ -1,0 +1,76 @@
+{
+  "name": "youtubetv-for-windows",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Unofficial, x64-only Windows host for the YouTube TV web interface (Electron + TypeScript).",
+  "license": "UNLICENSED",
+  "type": "module",
+  "main": "dist/main/index.js",
+  "packageManager": "npm@11.17.0",
+  "engines": {
+    "node": ">=24.19.0 <25.0.0",
+    "npm": ">=11.17.0 <12.0.0"
+  },
+  "os": [
+    "win32"
+  ],
+  "cpu": [
+    "x64"
+  ],
+  "scripts": {
+    "preinstall": "node scripts/check-environment.cjs",
+    "postinstall": "node node_modules/electron/install.js",
+    "preflight": "node scripts/check-environment.cjs",
+    "clean": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true});require('node:fs').rmSync('release-output',{recursive:true,force:true})\"",
+    "clean-install": "npm run clean && npm run preflight && npm ci",
+    "build": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\" && tsc -p tsconfig.build.json && tsc -p tsconfig.preload.json && node scripts/mark-preload-cjs.cjs",
+    "lint": "eslint .",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.preload.json",
+    "test": "npm run test:unit",
+    "test:unit": "node scripts/run-tests.cjs unit",
+    "test:electron": "node scripts/run-tests.cjs electron",
+    "package": "npm run build && electron-builder --win --x64 --dir --publish never",
+    "verify:artifacts": "node scripts/verify-artifacts.cjs",
+    "verify:static": "npm run preflight && npm run lint && npm run format:check && npm run typecheck && npm run test:unit",
+    "verify:windows": "npm run test:electron && npm run package && npm run verify:artifacts",
+    "verify": "npm run verify:static && npm run verify:windows"
+  },
+  "allowScripts": {
+    "electron-winstaller": true
+  },
+  "devDependencies": {
+    "@eslint/js": "10.0.1",
+    "@types/node": "24.19.0",
+    "electron": "44.4.5",
+    "electron-builder": "26.15.3",
+    "eslint": "10.11.0",
+    "globals": "17.12.0",
+    "prettier": "3.9.9",
+    "typescript": "5.9.3",
+    "typescript-eslint": "8.70.1"
+  },
+  "build": {
+    "appId": "io.github.danielrepublic.youtubetv-for-windows",
+    "productName": "youtubetv-for-windows",
+    "directories": {
+      "output": "release-output"
+    },
+    "files": [
+      "dist/**/*",
+      "package.json"
+    ],
+    "asar": true,
+    "win": {
+      "target": [
+        {
+          "target": "dir",
+          "arch": [
+            "x64"
+          ]
+        }
+      ]
+    }
+  }
+}
