@@ -59,22 +59,41 @@ test("no override path exists anywhere in production source", () => {
   // NOTE: readFileSync is intentionally absent too: it is handled by the
   // host-surface file-read test below, because the updater domain owns
   // legitimate file I/O (lock + manifest) under src/main/update/.
+  //
+  // process.argv has exactly ONE sanctioned reader: the nonce allowlist
+  // module that parses the NSIS relaunch handoff (--update-nonce only). The
+  // separate test below proves the allowlist list itself is exactly one
+  // file, that the parser ignores everything else, and that no other
+  // argument literal exists in that module. Every other src/ file remains
+  // banned outright.
+  const launchArgumentsFile = path.join(
+    srcDirectory,
+    "main",
+    "update",
+    "launch-arguments.ts",
+  );
   const forbidden = [
-    /process\.argv/,
-    /commandLine/,
-    /getenv/,
-    /YOUTUBE_TV_USER_AGENT/,
-    /--user-agent/,
-    /localStorage/,
-    /sessionStorage/,
-    /exposeInMainWorld/,
-    /ipcRenderer/,
-    /ipcMain/,
+    {
+      pattern: /process\.argv/,
+      allowlist: new Set([launchArgumentsFile]),
+    },
+    { pattern: /commandLine/ },
+    { pattern: /getenv/ },
+    { pattern: /YOUTUBE_TV_USER_AGENT/ },
+    { pattern: /--user-agent/ },
+    { pattern: /localStorage/ },
+    { pattern: /sessionStorage/ },
+    { pattern: /exposeInMainWorld/ },
+    { pattern: /ipcRenderer/ },
+    { pattern: /ipcMain/ },
   ];
   const violations = [];
   for (const file of files) {
     const contents = fs.readFileSync(file, "utf8");
-    for (const pattern of forbidden) {
+    for (const { pattern, allowlist } of forbidden) {
+      if (allowlist !== undefined && allowlist.has(file)) {
+        continue;
+      }
       if (pattern.test(contents)) {
         violations.push(
           `${path.relative(repositoryRoot, file)} matches ${pattern}`,
@@ -83,6 +102,60 @@ test("no override path exists anywhere in production source", () => {
     }
   }
   assert.deepEqual(violations, []);
+});
+
+test("the only argument read is the narrow update-nonce parser", async () => {
+  const launchArgumentsFile = path.join(
+    srcDirectory,
+    "main",
+    "update",
+    "launch-arguments.ts",
+  );
+  const readers = listSourceFiles().filter((file) =>
+    /process\.argv/.test(fs.readFileSync(file, "utf8")),
+  );
+  assert.deepEqual(
+    readers,
+    [launchArgumentsFile],
+    "exactly one src/ file may read the process argument vector",
+  );
+
+  const { UPDATE_NONCE_FLAG, parseUpdateNonce, readLaunchUpdateNonce } =
+    await import("../../src/main/update/launch-arguments.ts");
+  assert.equal(UPDATE_NONCE_FLAG, "--update-nonce");
+  // Only the nonce flag is honored...
+  assert.equal(parseUpdateNonce(["--update-nonce=abc-DEF-123"]), "abc-DEF-123");
+  // ...and every override-shaped argument is dropped.
+  for (const argumentVector of [
+    ["--user-agent=evil"],
+    ["--url=https://evil.example/"],
+    ["--target-url=https://evil.example/"],
+    ["--profile=C:\\evil"],
+    ["/D=C:\\evil"],
+    ["--diagnostics"],
+    ["--update-nonce-evil=deadbeef"],
+  ]) {
+    assert.equal(parseUpdateNonce(argumentVector), null);
+  }
+  // The ambient vector of this process carries no nonce.
+  assert.equal(readLaunchUpdateNonce(), null);
+
+  // Executable code in the allowlisted module contains exactly one
+  // double-dash literal: the nonce flag. No second hidden switch can exist.
+  const codeOnly = fs
+    .readFileSync(launchArgumentsFile, "utf8")
+    .split("\n")
+    .filter((line) => {
+      const trimmed = line.trimStart();
+      return (
+        !trimmed.startsWith("//") &&
+        !trimmed.startsWith("*") &&
+        !trimmed.startsWith("/*")
+      );
+    })
+    .join("\n");
+  const flagLiterals = codeOnly.match(/--[A-Za-z][A-Za-z0-9-]*/g) ?? [];
+  assert.deepEqual([...new Set(flagLiterals)], ["--update-nonce"]);
 });
 
 test("only the updater domain reads files, and it cannot steer identity", () => {

@@ -74,6 +74,104 @@ export function profileFallbackDialog(
   };
 }
 
+// ---------------------------------------------------------------------------
+// Update guidance (todo 6)
+//
+// Two bilingual surfaces cover every non-happy update outcome:
+//
+//   - updateFailureDialog — a PRE-install failure (download, verification, or
+//     the verified installer could not be started). The installed version
+//     still launches; the user may download the release manually.
+//   - updateRepairDialog  — a POST-install problem: the update ran but the
+//     atomic success marker is missing or invalid, so the relaunched
+//     bootstrap cannot confirm the install.
+//
+// Neither message ever promises a rollback. The previous application files
+// were replaced by the installer, and the documented recovery is a manual
+// download from the release page — the text says exactly that, in both
+// languages. Both dialogs offer the release page as the first button.
+// ---------------------------------------------------------------------------
+
+export type UpdateFailureKind =
+  "download-or-verify-failed" | "installer-launch-failed";
+
+export type RelaunchRepairReason = "missing" | "invalid";
+
+const OPEN_DOWNLOAD_BUTTON = "開啟下載頁面 (Open download page)";
+const CONFIRM_BUTTON = "確定 (OK)";
+
+export interface UpdateGuidanceDialogContent {
+  title: string;
+  message: string;
+  detail: string;
+  buttons: [string, string];
+}
+
+const UPDATE_FAILURE_MESSAGES: Record<UpdateFailureKind, BilingualText> = {
+  "download-or-verify-failed": {
+    zhTW: "更新下載或驗證失敗，將以目前已安裝的版本啟動。你仍可從下方網址手動下載最新的安裝檔。",
+    en: "The update could not be downloaded or verified, so the installed version will start. You can still download the latest installer manually from the link below.",
+  },
+  "installer-launch-failed": {
+    zhTW: "已驗證的更新程式無法啟動，將以目前已安裝的版本啟動。你仍可從下方網址手動下載最新的安裝檔。",
+    en: "The verified update installer could not be started, so the installed version will start. You can still download the latest installer manually from the link below.",
+  },
+};
+
+export function updateFailureDialog(
+  kind: UpdateFailureKind,
+): UpdateGuidanceDialogContent {
+  const body = UPDATE_FAILURE_MESSAGES[kind];
+  return {
+    title: "更新失敗 / Update failed",
+    message: `${body.zhTW}\n${body.en}`,
+    detail: SUPPORT_RELEASE_URL,
+    buttons: [OPEN_DOWNLOAD_BUTTON, CONFIRM_BUTTON],
+  };
+}
+
+const UPDATE_REPAIR_MESSAGES: Record<RelaunchRepairReason, BilingualText> = {
+  missing: {
+    zhTW: "更新後的首次啟動找不到完成標記，無法確認此次安裝成功。此程式沒有自動回復功能，請以手動方式重新下載並安裝最新版本。",
+    en: "The completed-install marker was not found after the update, so this installation cannot be confirmed. There is no automatic rollback; download and install the latest version manually.",
+  },
+  invalid: {
+    zhTW: "更新完成標記無效，無法確認此次安裝成功。此程式沒有自動回復功能，請以手動方式重新下載並安裝最新版本。",
+    en: "The completed-install marker is invalid, so this installation cannot be confirmed. There is no automatic rollback; download and install the latest version manually.",
+  },
+};
+
+export function updateRepairDialog(
+  reason: RelaunchRepairReason,
+): UpdateGuidanceDialogContent {
+  const body = UPDATE_REPAIR_MESSAGES[reason];
+  return {
+    title: "更新回復指引 / Update recovery guidance",
+    message: `${body.zhTW}\n${body.en}`,
+    detail: SUPPORT_RELEASE_URL,
+    buttons: [OPEN_DOWNLOAD_BUTTON, CONFIRM_BUTTON],
+  };
+}
+
+/** Shows update guidance; the first button opens the release page. */
+export async function showUpdateGuidance(
+  presenter: DialogPresenter,
+  content: UpdateGuidanceDialogContent,
+  openDownloadPage: () => void,
+): Promise<void> {
+  const result = await presenter.showMessageBox({
+    title: content.title,
+    message: content.message,
+    detail: content.detail,
+    buttons: [...content.buttons],
+    defaultId: 0,
+    cancelId: 1,
+  });
+  if (result.response === 0) {
+    openDownloadPage();
+  }
+}
+
 export interface MessageBoxOptions {
   title?: string;
   message: string;

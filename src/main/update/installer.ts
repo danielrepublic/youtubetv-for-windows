@@ -13,6 +13,11 @@
  *
  * Every failure removes the partially written file. The caller still owns
  * removing the enclosing nonce directory.
+ *
+ * `verifyInstallerFile` is the same integrity check applied to an EXISTING
+ * local file with no network involved. Todo 6 re-runs it against the exact
+ * pending path immediately before spawning the installer, so a file that was
+ * swapped or truncated after the download decision can never be executed.
  */
 import { createHash } from "node:crypto";
 import { open, unlink, type FileHandle } from "node:fs/promises";
@@ -222,4 +227,127 @@ export async function downloadVerifiedInstaller(
       sha256: actualSha256,
     },
   };
+}
+
+export interface VerifyInstallerFileOptions {
+  /** Exact local path to re-verify (the pending installer). */
+  readonly path: string;
+  /** Signed manifest `size`. */
+  readonly expectedSize: number;
+  /** Signed manifest `sha256` (64 lowercase hex). */
+  readonly expectedSha256: string;
+  /** Signed-manifest byte budget; a larger file is rejected unread. */
+  readonly maxBytes: number;
+}
+
+export type InstallerFileVerification =
+  | { readonly ok: true }
+  | {
+      readonly ok: false;
+      readonly code: UpdateErrorCode;
+      readonly message: string;
+    };
+
+const VERIFY_CHUNK_BYTES = 1024 * 1024;
+
+/**
+ * Re-verifies an existing installer file against the signed size and SHA-256
+ * without any network access. Resolves a classified result; never throws.
+ * A file that no longer matches is reported, never "repaired".
+ */
+export async function verifyInstallerFile(
+  options: VerifyInstallerFileOptions,
+): Promise<InstallerFileVerification> {
+  if (options.expectedSize > options.maxBytes) {
+    return {
+      ok: false,
+      code: UPDATE_ERROR_CODES.DOWNLOAD_TOO_LARGE,
+      message: `the signed installer size ${options.expectedSize} exceeds the ${options.maxBytes} byte budget`,
+    };
+  }
+
+  let handle: FileHandle;
+  try {
+    handle = await open(options.path, "r");
+  } catch (error) {
+    return {
+      ok: false,
+      code: UPDATE_ERROR_CODES.STORAGE_ERROR,
+      message: `could not open the pending installer for verification: ${describe(error)}`,
+    };
+  }
+
+  try {
+    const stats = await handle.stat();
+    if (!stats.isFile()) {
+      return {
+        ok: false,
+        code: UPDATE_ERROR_CODES.STORAGE_ERROR,
+        message: "the pending installer path is not a regular file",
+      };
+    }
+    if (stats.size > options.maxBytes) {
+      return {
+        ok: false,
+        code: UPDATE_ERROR_CODES.DOWNLOAD_TOO_LARGE,
+        message: `the pending installer is ${stats.size} bytes, beyond the ${options.maxBytes} byte budget`,
+      };
+    }
+    if (stats.size === 0) {
+      return {
+        ok: false,
+        code: UPDATE_ERROR_CODES.INSTALLER_EMPTY,
+        message: "the pending installer is zero bytes",
+      };
+    }
+    if (stats.size !== options.expectedSize) {
+      return {
+        ok: false,
+        code: UPDATE_ERROR_CODES.INSTALLER_SIZE_MISMATCH,
+        message: `the pending installer is ${stats.size} bytes but the signed manifest declares ${options.expectedSize}`,
+      };
+    }
+
+    const hash = createHash("sha256");
+    const buffer = Buffer.allocUnsafe(VERIFY_CHUNK_BYTES);
+    let position = 0;
+    for (;;) {
+      const { bytesRead } = await handle.read(
+        buffer,
+        0,
+        buffer.length,
+        position,
+      );
+      if (bytesRead === 0) {
+        break;
+      }
+      hash.update(buffer.subarray(0, bytesRead));
+      position += bytesRead;
+    }
+    if (position !== options.expectedSize) {
+      return {
+        ok: false,
+        code: UPDATE_ERROR_CODES.INSTALLER_SIZE_MISMATCH,
+        message: `the pending installer changed while it was verified: read ${position} bytes but the signed manifest declares ${options.expectedSize}`,
+      };
+    }
+    const actualSha256 = hash.digest("hex");
+    if (actualSha256 !== options.expectedSha256) {
+      return {
+        ok: false,
+        code: UPDATE_ERROR_CODES.INSTALLER_HASH_MISMATCH,
+        message:
+          "the pending installer SHA-256 does not match the signed manifest",
+      };
+    }
+    return { ok: true };
+  } catch (error) {
+    return {
+      ok: false,
+      code: UPDATE_ERROR_CODES.STORAGE_ERROR,
+      message: `could not read the pending installer for verification: ${describe(error)}`,
+    };
+  } finally {
+    await closeQuietly(handle);
+  }
 }

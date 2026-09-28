@@ -19,6 +19,8 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { startHost } from "../../dist/main/app.js";
 import { createProfileDiagnostics } from "../../dist/main/diagnostics.js";
+import { createMemoryEtagCache } from "../../dist/main/update/discovery.js";
+import { runPreWindowStage } from "../../dist/main/update/startup.js";
 import { IDENTITY_PARTITION } from "../../dist/main/session.js";
 import { assertIdentityPolicy } from "../../dist/main/user-agent.js";
 import { buildWindowOptions } from "../../dist/main/window.js";
@@ -245,6 +247,8 @@ async function runPolicyScenario(name) {
     await runProfileScenario();
   } else if (name === "diagnostics") {
     await runDiagnosticsScenario();
+  } else if (name === "update") {
+    await runUpdateScenario();
   } else {
     throw new Error(`fixture-host: unknown scenario ${name}`);
   }
@@ -620,6 +624,137 @@ async function runDiagnosticsScenario() {
     filePath: diagnostics === null ? null : diagnostics.filePath,
     counters: diagnostics === null ? null : diagnostics.counters,
     externalCalls: recorders.externalCalls.length,
+  });
+}
+
+// Pre-window update stage scenario: drives the REAL `startHost` composition
+// with the REAL `runPreWindowStage` state machine and a fake feed injected at
+// the composition root (dependency injection — there is no runtime override
+// anywhere in src/). The node-side suite asserts the ordering guarantee (no
+// window when the installer is handed off), the exact detached spawn
+// arguments, and that a failed verification shows the bilingual guidance and
+// still launches the installed version.
+//
+// The feed is a directory prepared by the test:
+//   feed.json      release body, manifest text, signature, keyring, versions
+//   installer.bin  the exact signed installer bytes
+async function runUpdateScenario() {
+  const feedDir = paramValue("feed-dir");
+  const baseDir = paramValue("base-dir");
+  const pageUrl = paramValue("page-url");
+  if (feedDir === undefined || baseDir === undefined || pageUrl === undefined) {
+    throw new Error(
+      "fixture-host update: --feed-dir, --base-dir and --page-url are required",
+    );
+  }
+  const feed = JSON.parse(
+    fs.readFileSync(path.join(feedDir, "feed.json"), "utf8"),
+  );
+  const installerBytes = fs.readFileSync(
+    path.join(feedDir, feed.installerFile),
+  );
+  const profileDirectory = path.join(
+    baseDir,
+    "youtubetv-for-windows",
+    "profile",
+  );
+  const updateBase = path.join(baseDir, "youtubetv-for-windows", "updates");
+  fs.mkdirSync(profileDirectory, { recursive: true });
+
+  const feedTransport = async (url) => {
+    if (url === feed.urls.releases) {
+      return new Response(JSON.stringify(feed.release), {
+        headers: { "content-type": "application/json" },
+      });
+    }
+    if (url === feed.urls.manifest) {
+      return new Response(Buffer.from(feed.manifestText, "utf8"));
+    }
+    if (url === feed.urls.signature) {
+      return new Response(Buffer.from(feed.signatureBase64, "utf8"));
+    }
+    if (url === feed.urls.installer) {
+      return new Response(null, {
+        status: 302,
+        headers: { location: feed.urls.installerRedirect },
+      });
+    }
+    if (url === feed.urls.installerRedirect) {
+      return new Response(installerBytes);
+    }
+    throw new Error(`fixture-host update: unexpected request ${url}`);
+  };
+  const spawnCalls = [];
+  const stageReports = [];
+  const dialogOptions = [];
+  let quitRequested = false;
+  // The update stage gets its OWN presenter so the asserted dialogs are
+  // exactly the update guidance; the host policy presenter (which also
+  // reports route failures) is a separate recorder.
+  const updatePresenter = {
+    showMessageBox: async (options) => {
+      dialogOptions.push(options);
+      return { response: 1 };
+    },
+  };
+  const policyPresenter = {
+    showMessageBox: async () => ({ response: 2 }),
+  };
+
+  const host = await startHost(
+    {
+      session: session.fromPartition(IDENTITY_PARTITION),
+      appPath: repositoryRootFromHere(),
+      createWindow: (options) => new BrowserWindow({ ...options, show: false }),
+    },
+    pageUrl,
+    {
+      opener: { openExternal: () => undefined },
+      presenter: policyPresenter,
+      preWindowStage: () =>
+        runPreWindowStage({
+          profileDirectory,
+          transport: feedTransport,
+          keyring: feed.keyring,
+          version: feed.currentVersion,
+          etagCache: createMemoryEtagCache(),
+          now: () => feed.now,
+          limits: { requestTimeoutMs: 2000, retries: 0, retryDelayMs: 0 },
+          processId: 5150,
+          spawnInstaller: (installerPath, argumentsList, options) => {
+            spawnCalls.push({
+              installerPath,
+              arguments: [...argumentsList],
+              options,
+            });
+            return { ok: true, unref: () => undefined };
+          },
+          requestQuit: () => {
+            quitRequested = true;
+          },
+          presenter: updatePresenter,
+          openDownloadPage: () => undefined,
+          report: (record) => {
+            stageReports.push(record);
+          },
+        }),
+    },
+  );
+
+  const pendingRoot = path.join(updateBase, "pending");
+  report({
+    event: "update-result",
+    hostStarted: host !== null,
+    windowCount: BrowserWindow.getAllWindows().length,
+    spawnCalls,
+    quitRequested,
+    stageReports,
+    dialogCount: dialogOptions.length,
+    dialogTitle: dialogOptions.length > 0 ? dialogOptions[0].title : null,
+    dialogMessage: dialogOptions.length > 0 ? dialogOptions[0].message : null,
+    pendingDirectories: fs.existsSync(pendingRoot)
+      ? fs.readdirSync(pendingRoot)
+      : [],
   });
 }
 

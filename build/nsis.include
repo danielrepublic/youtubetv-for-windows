@@ -1,0 +1,348 @@
+; ===========================================================================
+; youtubetv-for-windows - launcher handoff include (todo 6)
+; ===========================================================================
+;
+; WIRING (todo 7 owns the packaging config; this file is already complete):
+;
+;   electron-builder config:
+;     "nsis": { "include": "nsis.include", ... }
+;
+;   `nsis.include` is resolved by electron-builder against the build
+;   resources directory (default `build/`), so the effective path is
+;   `build/nsis.include`. electron-builder then emits `!include` for this
+;   file into the common installer script header, i.e. BEFORE the template
+;   body. The template invokes the documented hooks:
+;
+;     installer.nsi:79  -> `!ifmacrodef customInit`     (inside .onInit)
+;     installSection.nsh:81 -> `!ifmacrodef customInstall` (end of install)
+;
+;   `customInit` is deliberately used (NOT `preInit`): installer.nsi runs it
+;   after `initMultiUser` and BEFORE `CHECK_APP_RUNNING` and before
+;   `uninstallOldVersion` / `installApplicationFiles`, so waiting here blocks
+;   every file-replacement action. `customInstall` runs after all files,
+;   registry entries and shortcuts are in place and before electron-builder's
+;   optional `doStartApp`, which is a no-op for this handoff because neither
+;   `--force-run` nor `--updated` is passed.
+;
+; REQUIRED DEFINES AT INSERTION TIME (provided by electron-builder's
+; templates; the standalone harness defines them itself):
+;   ${APP_EXECUTABLE_FILENAME}  - installed application executable name
+;
+; REQUIRED INCLUDES AT INSERTION TIME (provided by installer.nsi: MUI2 ->
+; LogicLib, multiUser.nsh -> FileFunc.nsh; the harness includes them
+; explicitly):
+;   LogicLib.nsh   (${If}, ${Do}, ${Break}, ...)
+;   FileFunc.nsh   (${GetParameters}, ${GetOptions})
+;
+; ---------------------------------------------------------------------------
+; THE HANDOFF PROTOCOL
+; ---------------------------------------------------------------------------
+;
+; The launcher stage (src/main/update/startup.ts) spawns the verified NSIS
+; installer detached with exactly:
+;
+;     <installer>.exe /S --update-parent-pid=<launcher pid> \
+;                        --update-nonce=<32 lowercase hex nonce>
+;
+; .onInit (`customInit`):
+;   1. both flags are parsed with GetOptions (case-sensitive exact tokens);
+;      exactly-both-or-neither is enforced: any partial handoff aborts with a
+;      nonzero exit code before touching anything,
+;   2. the nonce is re-validated against the launcher alphabet
+;      [A-Za-z0-9-]{1,64} plus an explicit rejection of every character that
+;      could escape the status directory or the command line (path
+;      separators, `.`, quotes, `$`, `%`, spaces, redirection characters),
+;   3. the exact parent PID is polled with
+;      `tasklist /FI "PID eq <pid>" /FO CSV /NH | findstr /C:,"<pid>",`
+;      every 250 ms until it exits or a 60 s deadline passes. The CSV output
+;      quotes every field (`"node.exe","44184","Console",...`), so the
+;      search string must include the quotes AND the comma delimiters; the
+;      backslash-escaped quotes survive cmd.exe's quote stripping and reach
+;      findstr literally. findstr exits 0 on a match and 1 on no match, and
+;      only that exit code is used. While the parent lives, NO
+;      uninstall/copy/replace action runs.
+;   On deadline expiry the installer ABORTS (exit code 3, `Quit` before any
+;   section runs) and replaces nothing. Rationale: replacing files that a
+;   still-running process holds open is exactly the corruption this handoff
+;   exists to prevent; a skipped update is retried on the next launch, a
+;   half-replaced install is not recoverable.
+;
+; install section (`customInstall`), only in handoff mode:
+;   4. the atomic success marker is written as
+;        <temp>                 "%LOCALAPPDATA%\youtubetv-for-windows\
+;                                update-status\success-<nonce>.json.tmp"
+;        Rename <temp> -> final  (bounded retry; atomic publish)
+;      The marker content is `{"nonce":"<nonce>"}`; the nonce is the receipt
+;      that the relaunched bootstrap consumes exactly once.
+;   5. the freshly installed app is started with the same nonce:
+;        Exec '"$INSTDIR\${APP_EXECUTABLE_FILENAME}" --update-nonce=<nonce>'
+;      If the marker could not be published after the retry budget, the app
+;      is started WITHOUT the nonce, so a relaunch never claims a completed
+;      update that was not recorded (and never triggers a false repair
+;      prompt). Failure to record is silent; success is always verified.
+;
+; NONCE CONSUMPTION: the relaunched bootstrap
+; (`src/main/update/relaunch.ts`) reads
+; `success-<nonce>.json`, requires its `nonce` field to equal the launch
+; nonce, and DELETES the marker. A missing/invalid marker shows the
+; bilingual repair + manual-download guidance; there is no rollback.
+;
+; DIRECTORIES (fixed convention; the todo 7 uninstaller must remove the whole
+; `%LOCALAPPDATA%\youtubetv-for-windows` tree):
+;   profile       %LOCALAPPDATA%\youtubetv-for-windows\profile
+;   pending       %LOCALAPPDATA%\youtubetv-for-windows\updates
+;   status        %LOCALAPPDATA%\youtubetv-for-windows\update-status
+;   diagnostics   %LOCALAPPDATA%\youtubetv-for-windows\diagnostics
+;
+; STANDALONE REUSE: every step is a namespaced macro (YTVW_*) that can be
+; inserted by a test script with its own defines; the `customInit` /
+; `customInstall` macros are thin compositions of those macros.
+;
+; UNINSTALLER BUILD: electron-builder compiles the same source tree a second
+; time with BUILD_UNINSTALLER defined. That script never inserts the install
+; hooks, so an unused `Var` there trips NSIS warning 6001, which
+; electron-builder treats as an ERROR. The whole include is therefore skipped
+; in the uninstaller build.
+; ===========================================================================
+
+!ifndef BUILD_UNINSTALLER
+
+!ifndef YTVW_NSIS_INCLUDE_GUARD
+!define YTVW_NSIS_INCLUDE_GUARD
+
+; Exit codes for the documented abort paths.
+!define YTVW_EXIT_BAD_HANDOFF 2
+!define YTVW_EXIT_PARENT_TIMEOUT 3
+
+; Bounded parent wait: 60 s at 250 ms poll intervals.
+!ifndef YTVW_PARENT_WAIT_TIMEOUT_MS
+  !define YTVW_PARENT_WAIT_TIMEOUT_MS 60000
+!endif
+!ifndef YTVW_PARENT_POLL_INTERVAL_MS
+  !define YTVW_PARENT_POLL_INTERVAL_MS 250
+!endif
+
+!ifndef YTVW_STATUS_DIR
+  !define YTVW_STATUS_DIR "$LOCALAPPDATA\youtubetv-for-windows\update-status"
+!endif
+
+Var ytvwParameters
+Var ytvwHandoffMode
+Var ytvwParentPid
+Var ytvwNonce
+Var ytvwWaitElapsed
+Var ytvwWaitResult
+Var ytvwTasklistCode
+Var ytvwNonceIndex
+Var ytvwNonceChar
+Var ytvwNonceValid
+Var ytvwPidNumeric
+Var ytvwMarkerPath
+Var ytvwMarkerHandle
+Var ytvwMarkerAttempts
+Var ytvwMarkerWritten
+
+; ---------------------------------------------------------------------------
+; YTVW_VALIDATE_NONCE <nonce> <resultVar>
+;   resultVar = "1" valid, "0" rejected.
+;   Length 1..64, then every character is compared against the characters
+;   that could escape the marker path or the relaunch command line.
+; ---------------------------------------------------------------------------
+!macro YTVW_VALIDATE_NONCE nonce resultVar
+  StrCpy ${resultVar} "0"
+  StrLen $ytvwNonceIndex "${nonce}"
+  ${If} $ytvwNonceIndex >= 1
+  ${AndIf} $ytvwNonceIndex <= 64
+    StrCpy ${resultVar} "1"
+    StrCpy $ytvwNonceIndex 0
+    ${Do}
+      StrCpy $ytvwNonceChar "${nonce}" 1 $ytvwNonceIndex
+      ${If} $ytvwNonceChar == ""
+        ${Break}
+      ${EndIf}
+      ${If} $ytvwNonceChar == "\"
+      ${OrIf} $ytvwNonceChar == "/"
+      ${OrIf} $ytvwNonceChar == ":"
+      ${OrIf} $ytvwNonceChar == "."
+      ${OrIf} $ytvwNonceChar == "$\""
+      ${OrIf} $ytvwNonceChar == "'"
+      ${OrIf} $ytvwNonceChar == "$$"
+      ${OrIf} $ytvwNonceChar == "%"
+      ${OrIf} $ytvwNonceChar == " "
+      ${OrIf} $ytvwNonceChar == "$\t"
+      ${OrIf} $ytvwNonceChar == "*"
+      ${OrIf} $ytvwNonceChar == "?"
+      ${OrIf} $ytvwNonceChar == "<"
+      ${OrIf} $ytvwNonceChar == ">"
+      ${OrIf} $ytvwNonceChar == "|"
+      ${OrIf} $ytvwNonceChar == ";"
+        StrCpy ${resultVar} "0"
+        ${Break}
+      ${EndIf}
+      IntOp $ytvwNonceIndex $ytvwNonceIndex + 1
+    ${Loop}
+  ${EndIf}
+!macroend
+
+; ---------------------------------------------------------------------------
+; YTVW_PARSE_HANDOFF
+;   Sets $ytvwHandoffMode to:
+;     "normal"  - neither flag: an ordinary (manual) install run,
+;     "update"  - both flags: the launcher handoff,
+;     "invalid" - exactly one flag, or an unparsable value (caller aborts).
+; ---------------------------------------------------------------------------
+!macro YTVW_PARSE_HANDOFF
+  StrCpy $ytvwHandoffMode "normal"
+  StrCpy $ytvwParentPid ""
+  StrCpy $ytvwNonce ""
+  ${GetParameters} $ytvwParameters
+
+  ClearErrors
+  ${GetOptions} $ytvwParameters "--update-parent-pid=" $ytvwParentPid
+  ${If} ${Errors}
+    StrCpy $ytvwParentPid ""
+  ${EndIf}
+
+  ClearErrors
+  ${GetOptions} $ytvwParameters "--update-nonce=" $ytvwNonce
+  ${If} ${Errors}
+    StrCpy $ytvwNonce ""
+  ${EndIf}
+
+  ${If} $ytvwParentPid != ""
+    ; The PID must be a canonical positive integer: IntOp normalizes the
+    ; string, so any non-digit character or leading zero fails the round trip.
+    StrCpy $ytvwPidNumeric ""
+    IntOp $ytvwPidNumeric $ytvwParentPid + 0
+    ${If} $ytvwPidNumeric != $ytvwParentPid
+    ${OrIf} $ytvwPidNumeric <= 0
+      StrCpy $ytvwParentPid ""
+    ${EndIf}
+  ${EndIf}
+
+  ${If} $ytvwParentPid != ""
+  ${AndIf} $ytvwNonce != ""
+    StrCpy $ytvwHandoffMode "update"
+  ${ElseIf} $ytvwParentPid != ""
+  ${OrIf} $ytvwNonce != ""
+    StrCpy $ytvwHandoffMode "invalid"
+  ${EndIf}
+!macroend
+
+; ---------------------------------------------------------------------------
+; YTVW_WAIT_FOR_PARENT <pid> <timeoutMs> <resultVar>
+;   resultVar = "0" the process no longer exists, "1" the deadline expired.
+;   Polls `tasklist` filtered to the exact PID and matches the CSV field
+;   `,"<pid>",` with findstr (the CSV quotes are part of the field, so the
+;   pattern must carry them; `\"` survives cmd.exe as a literal quote).
+;   findstr's exit code (0 = match, 1 = no match) is the only signal used.
+; ---------------------------------------------------------------------------
+!macro YTVW_WAIT_FOR_PARENT pid timeoutMs resultVar
+  StrCpy ${resultVar} "1"
+  StrCpy $ytvwWaitElapsed 0
+  ${Do}
+    nsExec::Exec '"$SYSDIR\cmd.exe" /C tasklist /FI "PID eq ${pid}" /FO CSV /NH | "$SYSDIR\findstr.exe" /C:,\"${pid}\",'
+    Pop $ytvwTasklistCode
+    ${If} $ytvwTasklistCode != 0
+      StrCpy ${resultVar} "0"
+      ${Break}
+    ${EndIf}
+    Sleep ${YTVW_PARENT_POLL_INTERVAL_MS}
+    IntOp $ytvwWaitElapsed $ytvwWaitElapsed + ${YTVW_PARENT_POLL_INTERVAL_MS}
+    ${If} $ytvwWaitElapsed >= ${timeoutMs}
+      ${Break}
+    ${EndIf}
+  ${Loop}
+!macroend
+
+; ---------------------------------------------------------------------------
+; YTVW_WRITE_SUCCESS_MARKER <nonce> <resultVar>
+;   Writes `{"nonce":"<nonce>"}` to `success-<nonce>.json.tmp` and atomically
+;   publishes it as `success-<nonce>.json` with Rename (bounded retry).
+;   resultVar = "1" published, "0" not published (temp file removed).
+; ---------------------------------------------------------------------------
+!macro YTVW_WRITE_SUCCESS_MARKER nonce resultVar
+  StrCpy ${resultVar} "0"
+  CreateDirectory "${YTVW_STATUS_DIR}"
+  StrCpy $ytvwMarkerPath "${YTVW_STATUS_DIR}\success-${nonce}.json"
+
+  ClearErrors
+  FileOpen $ytvwMarkerHandle "$ytvwMarkerPath.tmp" w
+  ${IfNot} ${Errors}
+    FileWrite $ytvwMarkerHandle `{"nonce":"${nonce}"}`
+    FileClose $ytvwMarkerHandle
+
+    StrCpy $ytvwMarkerAttempts 0
+    ${Do}
+      ClearErrors
+      Rename "$ytvwMarkerPath.tmp" "$ytvwMarkerPath"
+      ${IfNot} ${Errors}
+        StrCpy ${resultVar} "1"
+        ${Break}
+      ${EndIf}
+      Sleep 200
+      IntOp $ytvwMarkerAttempts $ytvwMarkerAttempts + 1
+    ${LoopUntil} $ytvwMarkerAttempts >= 10
+
+    ${If} ${resultVar} != "1"
+      Delete "$ytvwMarkerPath.tmp"
+    ${EndIf}
+  ${EndIf}
+!macroend
+
+; ---------------------------------------------------------------------------
+; YTVW_RELAUNCH_APP [nonce]
+;   Starts the installed application. With a nonce the app verifies the
+;   consumed marker; without one the app starts normally.
+; ---------------------------------------------------------------------------
+!macro YTVW_RELAUNCH_APP nonce
+  ${If} "${nonce}" == ""
+    Exec '"$INSTDIR\${APP_EXECUTABLE_FILENAME}"'
+  ${Else}
+    Exec '"$INSTDIR\${APP_EXECUTABLE_FILENAME}" --update-nonce=${nonce}'
+  ${EndIf}
+!macroend
+
+; ---------------------------------------------------------------------------
+; electron-builder hook: runs inside .onInit, after initMultiUser and before
+; CHECK_APP_RUNNING / uninstallOldVersion / installApplicationFiles.
+; ---------------------------------------------------------------------------
+!macro customInit
+  !insertmacro YTVW_PARSE_HANDOFF
+  ${If} $ytvwHandoffMode == "invalid"
+    SetErrorLevel ${YTVW_EXIT_BAD_HANDOFF}
+    Quit
+  ${EndIf}
+  ${If} $ytvwHandoffMode == "update"
+    !insertmacro YTVW_VALIDATE_NONCE "$ytvwNonce" $ytvwNonceValid
+    ${If} $ytvwNonceValid != "1"
+      SetErrorLevel ${YTVW_EXIT_BAD_HANDOFF}
+      Quit
+    ${EndIf}
+    !insertmacro YTVW_WAIT_FOR_PARENT "$ytvwParentPid" "${YTVW_PARENT_WAIT_TIMEOUT_MS}" $ytvwWaitResult
+    ${If} $ytvwWaitResult != "0"
+      ; The parent never exited: abort before ANY uninstall/copy action.
+      SetErrorLevel ${YTVW_EXIT_PARENT_TIMEOUT}
+      Quit
+    ${EndIf}
+  ${EndIf}
+!macroend
+
+; ---------------------------------------------------------------------------
+; electron-builder hook: runs at the end of the install section, after all
+; files/registry/shortcuts exist. Only the launcher handoff acts here.
+; ---------------------------------------------------------------------------
+!macro customInstall
+  ${If} $ytvwHandoffMode == "update"
+    !insertmacro YTVW_WRITE_SUCCESS_MARKER "$ytvwNonce" $ytvwMarkerWritten
+    ${If} $ytvwMarkerWritten == "1"
+      !insertmacro YTVW_RELAUNCH_APP "$ytvwNonce"
+    ${Else}
+      ; Never claim a completed update that could not be recorded.
+      !insertmacro YTVW_RELAUNCH_APP ""
+    ${EndIf}
+  ${EndIf}
+!macroend
+
+!endif ; YTVW_NSIS_INCLUDE_GUARD
+!endif ; BUILD_UNINSTALLER

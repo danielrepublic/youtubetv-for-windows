@@ -34,6 +34,40 @@ export const PROFILE_DIRECTORY_NAME = "youtubetv-for-windows";
 export const PROFILE_SUBDIRECTORY_NAME = "profile";
 export const SESSION_DATA_PATH_NAME = "sessionData";
 
+// UPDATE PATH CONVENTION (fixed; mirrored verbatim by the committed
+// build/nsis.include and owed to the todo 7 uninstaller):
+//
+//   %LOCALAPPDATA%\youtubetv-for-windows\updates        <- nonce pending
+//                                                          installers + lock
+//   %LOCALAPPDATA%\youtubetv-for-windows\update-status  <- atomic post-install
+//                                                          success markers
+//
+// Both are SIBLINGS of `profile` under the same version-independent per-user
+// base, which is the parent directory of the profile directory. They are
+// therefore outside any install directory (an update replaces only the
+// versioned install tree) and are removed together with the profile by the
+// uninstaller.
+export const UPDATE_DIRECTORY_NAME = "updates";
+export const UPDATE_STATUS_DIRECTORY_NAME = "update-status";
+
+export interface UpdateDirectoryConvention {
+  /** Base directory handed to the update domain (`checkForUpdate`). */
+  readonly updateBaseDirectory: string;
+  /** Directory holding atomic `success-<nonce>.json` markers. */
+  readonly statusDirectory: string;
+}
+
+/** Derives the update directories from the activated profile directory. */
+export function resolveUpdateDirectoryConvention(
+  profileDirectory: string,
+): UpdateDirectoryConvention {
+  const userBaseDirectory = path.dirname(profileDirectory);
+  return {
+    updateBaseDirectory: path.join(userBaseDirectory, UPDATE_DIRECTORY_NAME),
+    statusDirectory: path.join(userBaseDirectory, UPDATE_STATUS_DIRECTORY_NAME),
+  };
+}
+
 export interface BilingualGuidance {
   zhTW: string;
   en: string;
