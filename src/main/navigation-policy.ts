@@ -18,6 +18,7 @@
 // browser (validated https: only), Support (the release page via
 // openExternal) — with bounded retries and no infinite loop.
 
+import type { DiagnosticInput, DiagnosticRecorder } from "./diagnostics.ts";
 import { SUPPORT_RELEASE_URL, showRouteFailureDialog } from "./dialogs.ts";
 import type {
   DialogPresenter,
@@ -193,6 +194,10 @@ export interface NavigationPolicyContents {
     event: "will-navigate" | "will-redirect",
     listener: (event: NavigationEvent, url: string) => void,
   ): unknown;
+  on(
+    event: "did-navigate",
+    listener: (event: NavigationEvent, url: string) => void,
+  ): unknown;
   on(event: "did-finish-load", listener: () => void): unknown;
   on(
     event: "did-fail-load",
@@ -213,6 +218,9 @@ export interface NavigationPolicyWiring {
   opener: ExternalOpener;
   presenter: DialogPresenter;
   maxRetries?: number;
+  // Optional telemetry. When undefined the policy subscribes to exactly the
+  // todo 2/3 event set: no `did-navigate` listener and no record calls.
+  diagnostics?: DiagnosticRecorder;
 }
 
 // Installs the main-window policy on live webContents: unexpected
@@ -224,11 +232,25 @@ export function installNavigationPolicy(
   contents: NavigationPolicyContents,
   wiring: NavigationPolicyWiring,
 ): void {
+  const diagnostics = wiring.diagnostics;
+  const record =
+    diagnostics === undefined
+      ? undefined
+      : (input: DiagnosticInput): void => {
+          diagnostics.record(input);
+        };
   const redirectTarget = (event: NavigationEvent, url: string): void => {
     handleMainNavigation(wiring.opener, event, url);
   };
   contents.on("will-navigate", redirectTarget);
   contents.on("will-redirect", redirectTarget);
+  if (record !== undefined) {
+    // Committed main-frame navigation: the origin is the only URL-derived
+    // value ever recorded (the sink re-normalises it anyway).
+    contents.on("did-navigate", (_event, url) => {
+      record({ event: "navigation-committed", origin: url });
+    });
+  }
   let recovering = false;
   // A failed main-frame load is followed by did-finish-load for Chromium's
   // error page under the SAME URL. That commit must not enter recovery a
@@ -260,9 +282,11 @@ export function installNavigationPolicy(
       const failedUrl = lastFailureUrl;
       lastFailureUrl = null;
       if (current === failedUrl) {
+        // Chromium's error page for the failed load: not a real finish.
         return;
       }
     }
+    record?.({ event: "load-finished", origin: current });
     const outcome = classifyTvRouteUrl(current);
     if (outcome !== "ok") {
       enterRecovery(outcome, current);
@@ -270,8 +294,13 @@ export function installNavigationPolicy(
   });
   contents.on(
     "did-fail-load",
-    (_event, _errorCode, _errorDescription, validatedUrl, isMainFrame) => {
+    (_event, errorCode, _errorDescription, validatedUrl, isMainFrame) => {
       if (isMainFrame) {
+        record?.({
+          event: "load-failed",
+          errorCode,
+          origin: validatedUrl,
+        });
         lastFailureUrl = validatedUrl;
         enterRecovery("load-failed", validatedUrl);
       }

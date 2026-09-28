@@ -1,3 +1,4 @@
+import type { DiagnosticRecorder } from "./diagnostics.ts";
 import type { DialogPresenter } from "./dialogs.ts";
 import {
   installNavigationPolicy,
@@ -53,6 +54,11 @@ export interface HostPolicyDeps {
   opener: ExternalOpener;
   presenter: DialogPresenter;
   authOrigins?: readonly string[];
+  // Optional and undefined by default: when absent, NO diagnostics listeners
+  // are attached and the host behaves exactly as without diagnostics. The
+  // production entry passes a sink here ONLY when the documented sentinel
+  // file enabled diagnostics (see diagnostics.ts).
+  diagnostics?: DiagnosticRecorder;
 }
 
 // Seam for todo 6: the pre-window update stage runs here, after the identity
@@ -90,6 +96,10 @@ export async function startHost(
   await runPreWindowStage();
   const options = buildWindowOptions(runtime.appPath);
   const window = runtime.createWindow(options);
+  policies?.diagnostics?.record({
+    event: "window-created",
+    windowKind: "main",
+  });
   attachFullscreenToggle(window);
   if (policies !== undefined) {
     installNavigationPolicy(
@@ -98,11 +108,13 @@ export async function startHost(
         targetUrl,
         opener: policies.opener,
         presenter: policies.presenter,
+        diagnostics: policies.diagnostics,
       },
     );
     installPopupPolicy(window.webContents as unknown as PopupPolicyHost, {
       opener: policies.opener,
       authOrigins: policies.authOrigins,
+      diagnostics: policies.diagnostics,
     });
   }
   await window.loadURL(targetUrl);

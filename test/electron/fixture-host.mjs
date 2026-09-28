@@ -18,6 +18,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { startHost } from "../../dist/main/app.js";
+import { createProfileDiagnostics } from "../../dist/main/diagnostics.js";
 import { IDENTITY_PARTITION } from "../../dist/main/session.js";
 import { assertIdentityPolicy } from "../../dist/main/user-agent.js";
 import { buildWindowOptions } from "../../dist/main/window.js";
@@ -180,6 +181,9 @@ async function main() {
 //   loadfail     --page-url (unreachable), --dialog-script
 //   profile      --profile-base, --mode=set|get, --cookie-url,
 //                --cookie-name, --cookie-value
+//   diagnostics  --page-url (with secret query), --diagnostics-base,
+//                --auth-origin, --popup-url, --fail-url (optional),
+//                --dialog-script (optional)
 
 function createPolicyRecorders() {
   const externalCalls = [];
@@ -239,6 +243,8 @@ async function runPolicyScenario(name) {
     await runLoadfailScenario();
   } else if (name === "profile") {
     await runProfileScenario();
+  } else if (name === "diagnostics") {
+    await runDiagnosticsScenario();
   } else {
     throw new Error(`fixture-host: unknown scenario ${name}`);
   }
@@ -527,6 +533,94 @@ async function runProfileScenario() {
       value: found.length > 0 ? found[0].value : null,
     });
   }
+}
+
+// Opt-in telemetry: drives the real startHost composition (navigation +
+// popup policies plus the production diagnostics factory) against local
+// fixture URLs whose paths/query strings carry secret-shaped values. The
+// node suite reads the reported JSONL path and asserts the redaction
+// contract; this scenario reports only file paths and counters.
+async function runDiagnosticsScenario() {
+  const pageUrl = paramValue("page-url");
+  const diagnosticsBase = paramValue("diagnostics-base");
+  const authOrigin = paramValue("auth-origin");
+  const popupUrl = paramValue("popup-url");
+  const failUrl = paramValue("fail-url");
+  if (
+    pageUrl === undefined ||
+    diagnosticsBase === undefined ||
+    authOrigin === undefined ||
+    popupUrl === undefined
+  ) {
+    throw new Error(
+      "fixture-host diagnostics: --page-url, --diagnostics-base, " +
+        "--auth-origin and --popup-url are required",
+    );
+  }
+  const repositoryRoot = repositoryRootFromHere();
+  const activation = activateProfileDirectory({
+    localAppDataDir: diagnosticsBase,
+    appDataDir: path.join(os.tmpdir(), "ytv-diagnostics-should-not-appear"),
+    setSessionDataPath: (directory) => {
+      app.setPath("sessionData", directory);
+    },
+  });
+  // The production factory is the single opt-in read point: sentinel file
+  // <base>/youtubetv-for-windows/diagnostics/ENABLED present or absent.
+  const diagnostics = createProfileDiagnostics(activation.directory);
+  report({
+    event: "diagnostics-mode",
+    enabled: diagnostics !== null,
+    filePath: diagnostics === null ? null : diagnostics.filePath,
+    profileDirectory: activation.directory,
+  });
+  diagnostics?.record({ event: "app-ready" });
+  const recorders = createPolicyRecorders();
+  const electronSession = session.fromPartition(IDENTITY_PARTITION);
+  const host = await startHost(
+    {
+      session: electronSession,
+      appPath: repositoryRoot,
+      createWindow: (options) => new BrowserWindow({ ...options, show: false }),
+    },
+    pageUrl,
+    {
+      opener: recorders.opener,
+      presenter: recorders.presenterFromScript(parseDialogScript()),
+      authOrigins: [authOrigin],
+      // undefined when OFF, so the wiring adds zero diagnostics listeners.
+      diagnostics: diagnostics ?? undefined,
+    },
+  );
+  // An allowlisted popup: the policy records auth-window-opened at the
+  // allow decision and auth-window-closed from the child's closed event.
+  const childPromise = new Promise((resolve) => {
+    host.window.webContents.on("did-create-window", (child) => {
+      resolve(child);
+    });
+    setTimeout(() => resolve(undefined), 3000);
+  });
+  await host.window.webContents.executeJavaScript(
+    `(function () { window.open(${JSON.stringify(popupUrl)}, "_blank"); return true; })()`,
+  );
+  const child = await childPromise;
+  report({ event: "diagnostics-popup", childOpened: child !== undefined });
+  if (child !== undefined && !child.isDestroyed()) {
+    child.close();
+    await sleep(1200);
+  }
+  // A main-frame load failure: the numeric code is the only failure datum.
+  if (failUrl !== undefined) {
+    await host.window.loadURL(failUrl).catch(() => null);
+    await sleep(2500);
+  }
+  diagnostics?.record({ event: "app-quit" });
+  report({
+    event: "diagnostics-done",
+    filePath: diagnostics === null ? null : diagnostics.filePath,
+    counters: diagnostics === null ? null : diagnostics.counters,
+    externalCalls: recorders.externalCalls.length,
+  });
 }
 
 // No top-level await: awaiting the entry module's top-level promise blocks

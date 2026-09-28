@@ -25,6 +25,7 @@
 // violation the child is closed and (for valid https:) delegated
 // externally.
 
+import type { DiagnosticRecorder } from "./diagnostics.ts";
 import { isYoutubeHost } from "./navigation-policy.ts";
 import type { ExternalOpener } from "./navigation-policy.ts";
 
@@ -103,6 +104,9 @@ export interface ChildWindowContents {
 
 export interface CreatedChildWindow extends ChildWindowHandle {
   webContents: ChildWindowContents;
+  // Real BrowserWindows emit "closed"; optional so structural test fakes
+  // without an emitter stay valid.
+  on?(event: "closed", listener: () => void): unknown;
 }
 
 // Override options for allowed children. SECURITY INVARIANT: no partition
@@ -128,6 +132,9 @@ export interface WindowOpenResult {
 export interface PopupPolicyWiring {
   opener: ExternalOpener;
   authOrigins?: readonly string[];
+  // Optional telemetry. When undefined no open/close records are emitted and
+  // no "closed" listener is attached to children.
+  diagnostics?: DiagnosticRecorder;
 }
 
 // Handles one setWindowOpenHandler call: allowed auth origins become an
@@ -141,6 +148,11 @@ export function handleWindowOpen(
   const authOrigins = wiring.authOrigins ?? DEFAULT_AUTH_ORIGINS;
   const decision = decidePopupDestination(details.url, authOrigins);
   if (decision === "allow-child") {
+    wiring.diagnostics?.record({
+      event: "auth-window-opened",
+      origin: details.url,
+      windowKind: "auth",
+    });
     return {
       action: "allow",
       overrideBrowserWindowOptions: { ...childWindowOverrides() },
@@ -191,6 +203,12 @@ export function installPopupPolicy(
 ): void {
   host.setWindowOpenHandler((details) => handleWindowOpen(wiring, details));
   host.on("did-create-window", (child) => {
+    const diagnostics = wiring.diagnostics;
+    if (diagnostics !== undefined && typeof child.on === "function") {
+      child.on("closed", () => {
+        diagnostics.record({ event: "auth-window-closed", windowKind: "auth" });
+      });
+    }
     const guard = (event: { preventDefault(): void }, url: string): void => {
       handleChildNavigation(wiring, child, event, url);
     };
