@@ -1,0 +1,269 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/danielrepublic/youtubetv-for-windows/schemas/delivery-matrix-evidence-v1.json",
+  "title": "Clean Windows delivery matrix evidence",
+  "description": "Candidate-bound evidence for the two clean Windows environments. This schema records execution; it does not turn an unexecuted fixture into a passing release verdict. A release may only claim the clean-install delivery contract when every required (environment, command) row is present, bound to the exact candidate version, executed with exit code 0, and backed by a regular non-empty artifact file inside artifactRoot. The enforcing predicate is scripts/verify-delivery-matrix.cjs. Electron's official platform support for the pinned version is 'Windows (Windows 10 and up)' (electron/electron README at tag v44.4.5, https://github.com/electron/electron/blob/v44.4.5/README.md), which is why the windows-10-1809-x64 fixture floor is build 17763 (Windows 10 version 1809).",
+  "type": "object",
+  "required": [
+    "schemaVersion",
+    "candidateVersion",
+    "synthetic",
+    "artifactRoot",
+    "rows"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "const": "delivery-matrix-evidence/v1"
+    },
+    "candidateVersion": {
+      "type": "string",
+      "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+(?:-[0-9A-Za-z.-]+)?$",
+      "description": "The exact candidate version every row must also carry. A row bound to a different version is stale evidence and fails verification."
+    },
+    "synthetic": {
+      "type": "boolean",
+      "description": "Required. True only for test controls: a synthetic index is never machine evidence, and the verifier's pass record and PASS line echo this value. Omitting it would let a pass record read as real evidence nobody produced, so a missing or non-boolean value is rejected."
+    },
+    "artifactRoot": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Directory all row artifact paths resolve against, given relative to this index file. It must exist and be a directory; every referenced path must stay inside it."
+    },
+    "rows": {
+      "type": "array",
+      "minItems": 30,
+      "description": "The verifier additionally requires the exact environments x commands cross-product (see scripts/verify-delivery-matrix.cjs).",
+      "items": {
+        "$ref": "#/$defs/row"
+      }
+    }
+  },
+  "$defs": {
+    "environment": {
+      "type": "object",
+      "required": ["id", "family", "release", "build", "architecture"],
+      "properties": {
+        "id": {
+          "enum": ["windows-10-1809-x64", "windows-11-current-x64"]
+        },
+        "family": {
+          "const": "Windows"
+        },
+        "release": {
+          "enum": ["10", "11"]
+        },
+        "build": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "The Windows build actually observed on the clean machine. Permitted ranges are applied per environment id by the allOf clauses on each row."
+        },
+        "architecture": {
+          "const": "x64"
+        }
+      }
+    },
+    "row": {
+      "type": "object",
+      "required": [
+        "rowId",
+        "candidateVersion",
+        "environment",
+        "command",
+        "toolVersions",
+        "execution",
+        "observedResult",
+        "exitCode",
+        "artifactPath"
+      ],
+      "properties": {
+        "rowId": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Must be exactly '<environment.id>:<command>'. A required row that is absent, duplicated, or renamed fails verification by row id."
+        },
+        "candidateVersion": {
+          "type": "string",
+          "minLength": 1
+        },
+        "environment": {
+          "$ref": "#/$defs/environment"
+        },
+        "command": {
+          "type": "string",
+          "minLength": 1,
+          "description": "For the ten automated rows this is the exact npm script invocation. The five clean-environment rows are named observation scenarios instead of shell commands: 'standard-user install no-admin-elevation', 'start-menu shortcut launch', 'update-failure fallback', 'uninstaller profile deletion', 'artifact completeness'."
+        },
+        "toolVersions": {
+          "type": "object",
+          "required": [
+            "node",
+            "npm",
+            "electron",
+            "electronBuilder",
+            "verifier"
+          ],
+          "properties": {
+            "node": { "type": "string", "minLength": 1 },
+            "npm": { "type": "string", "minLength": 1 },
+            "electron": { "type": "string", "minLength": 1 },
+            "electronBuilder": { "type": "string", "minLength": 1 },
+            "verifier": { "type": "string", "minLength": 1 }
+          },
+          "description": "No value may be a placeholder (empty, TBD, todo, n/a, none, unknown, unexecuted, or <angle-bracketed>)."
+        },
+        "execution": {
+          "enum": ["executed", "unexecuted"],
+          "description": "Only 'executed' can pass. 'unexecuted' is the honest value for a row no VM has run, and it fails verification."
+        },
+        "observedResult": {
+          "enum": ["pass", "fail", "not-run"],
+          "description": "Only 'pass' can pass."
+        },
+        "exitCode": {
+          "type": "integer",
+          "description": "Only 0 can pass."
+        },
+        "artifactPath": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Path relative to artifactRoot. It must exist, be a regular file, and be non-empty; an absolute path, a traversing path, a directory, or an empty file fails by row id."
+        },
+        "installerPath": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Required on the 'artifact completeness' row. Relative to artifactRoot; must be an existing non-empty regular file."
+        },
+        "applicationExecutablePath": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Required on the 'artifact completeness' row. Relative to artifactRoot; must be an existing non-empty regular file whose PE header reads Machine 0x8664 (AMD64) and OptionalHeader.Magic 0x20b (PE32+)."
+        },
+        "shortcutPath": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Required on the 'start-menu shortcut launch' row. Relative to artifactRoot; must be an existing non-empty regular file (the shortcut the installer created, copied back as evidence)."
+        },
+        "profilePath": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Required on the 'uninstaller profile deletion' row. Relative to artifactRoot; must name the exact profile path that the uninstaller was supposed to remove, and that path must NOT exist at capture time. A missing or placeholder value fails: a bare boolean is not evidence of deletion."
+        },
+        "profileAbsentAfterUninstall": {
+          "const": true,
+          "description": "Required on the 'uninstaller profile deletion' row. Must be exactly true, and it is only meaningful alongside a concrete profilePath that the verifier confirms is absent."
+        },
+        "adminElevationRequired": {
+          "const": false,
+          "description": "Required on the 'standard-user install no-admin-elevation' row. Must be exactly false; a missing value fails, because a per-user install that needed elevation is not the claimed delivery."
+        },
+        "fallbackLaunchedInstalledVersion": {
+          "const": true,
+          "description": "Required on the 'update-failure fallback' row. Must be exactly true; a missing value fails, because a failed update that did not still launch the installed version is not the claimed fallback."
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "required": ["environment"],
+            "properties": {
+              "environment": {
+                "required": ["id"],
+                "properties": {
+                  "id": { "const": "windows-10-1809-x64" }
+                }
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "environment": {
+                "properties": {
+                  "release": { "const": "10" },
+                  "build": {
+                    "type": "integer",
+                    "minimum": 17763,
+                    "maximum": 19045
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "required": ["environment"],
+            "properties": {
+              "environment": {
+                "required": ["id"],
+                "properties": {
+                  "id": { "const": "windows-11-current-x64" }
+                }
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "environment": {
+                "properties": {
+                  "release": { "const": "11" },
+                  "build": { "type": "integer", "minimum": 22000 }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "required": ["command"],
+            "properties": { "command": { "const": "artifact completeness" } }
+          },
+          "then": {
+            "required": ["installerPath", "applicationExecutablePath"]
+          }
+        },
+        {
+          "if": {
+            "required": ["command"],
+            "properties": {
+              "command": { "const": "start-menu shortcut launch" }
+            }
+          },
+          "then": {
+            "required": ["shortcutPath"]
+          }
+        },
+        {
+          "if": {
+            "required": ["command"],
+            "properties": {
+              "command": { "const": "uninstaller profile deletion" }
+            }
+          },
+          "then": {
+            "required": ["profilePath", "profileAbsentAfterUninstall"]
+          }
+        },
+        {
+          "if": {
+            "required": ["command"],
+            "properties": {
+              "command": { "const": "standard-user install no-admin-elevation" }
+            }
+          },
+          "then": {
+            "required": ["adminElevationRequired"]
+          }
+        },
+        {
+          "if": {
+            "required": ["command"],
+            "properties": { "command": { "const": "update-failure fallback" } }
+          },
+          "then": {
+            "required": ["fallbackLaunchedInstalledVersion"]
+          }
+        }
+      ]
+    }
+  }
+}
