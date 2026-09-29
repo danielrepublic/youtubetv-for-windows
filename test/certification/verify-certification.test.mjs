@@ -19,6 +19,7 @@ function syntheticRecord(overrides = {}) {
     status: "passed",
     candidate: CANDIDATE,
     certifiedDate: DATE,
+    certifiedBy: "Maintainer synthetic fixture",
     device: "Synthetic fixture device (not real certification evidence)",
     windows: "Synthetic Windows 11 build (not real certification evidence)",
     electron: "44.4.5",
@@ -43,7 +44,7 @@ function syntheticRecord(overrides = {}) {
 Status: ${values.status}
 Candidate version: ${values.candidate}
 Certified date: ${values.certifiedDate}
-Certified by: Maintainer synthetic fixture
+Certified by: ${values.certifiedBy}
 Release page: https://github.com/danielrepublic/youtubetv-for-windows/releases/tag/v${values.candidate}
 
 ## Environment
@@ -180,6 +181,85 @@ test("accepts the complete synthetic fixture and labels it non-real", () => {
   assert.match(cli.stdout, /\[verify:certification\] PASS/);
   fs.rmSync(fixture.root, { recursive: true, force: true });
 });
+
+// DEFECT D1: the colon branch of valueFor() used to let the \s* after the
+// colon cross a line break, so an empty required field silently borrowed the
+// next line's text and was never reported missing. Two labels are probed
+// because the defect is in the pattern, not in any one field.
+for (const field of [
+  { override: "certifiedBy", label: "Certified by" },
+  { override: "certifiedDate", label: "Certified date" },
+]) {
+  test(`reports an empty colon-form ${field.label} as missing instead of borrowing the next line`, () => {
+    const fixture = writeFixture(syntheticRecord({ [field.override]: "" }));
+    const expected = `missing ${field.label}`;
+    const result = validateRecord(fixture.recordPath, CANDIDATE);
+    assert.deepEqual(result.failures, [expected]);
+    const cli = spawnSync(
+      process.execPath,
+      [
+        "scripts/verify-certification.cjs",
+        fixture.recordPath,
+        "--candidate-version",
+        CANDIDATE,
+      ],
+      { encoding: "utf8" },
+    );
+    assert.notEqual(cli.status, 0, cli.stdout);
+    assert.match(
+      cli.stderr,
+      new RegExp(expected.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")),
+    );
+    fs.rmSync(fixture.root, { recursive: true, force: true });
+  });
+}
+
+// The same borrow reaches two more required fields that F4 named: Release
+// page, and any environment field a maintainer writes in colon form instead
+// of the documented table form. Each probe replaces exactly one line of the
+// complete record, so an empty colon-form field is the only difference from
+// the record that passes.
+for (const line of [
+  {
+    label: "Release page",
+    filled: `Release page: https://github.com/danielrepublic/youtubetv-for-windows/releases/tag/v${CANDIDATE}`,
+    empty: "Release page:",
+  },
+  {
+    label: "Device model",
+    filled:
+      "| Device model | Synthetic fixture device (not real certification evidence) |",
+    empty: "Device model:",
+  },
+]) {
+  test(`reports an empty colon-form ${line.label} as missing instead of borrowing the next line`, () => {
+    const complete = syntheticRecord();
+    assert.ok(
+      complete.includes(line.filled),
+      "the probe must plant the defect in a line the fixture really has",
+    );
+    const fixture = writeFixture(complete.replace(line.filled, line.empty));
+    const expected = `missing ${line.label}`;
+    const result = validateRecord(fixture.recordPath, CANDIDATE);
+    assert.deepEqual(result.failures, [expected]);
+    const cli = spawnSync(
+      process.execPath,
+      [
+        "scripts/verify-certification.cjs",
+        fixture.recordPath,
+        "--candidate-version",
+        CANDIDATE,
+      ],
+      { encoding: "utf8" },
+    );
+    assert.equal(cli.status, 1, cli.stdout);
+    assert.match(
+      cli.stderr,
+      new RegExp(expected.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")),
+    );
+    fs.rmSync(fixture.root, { recursive: true, force: true });
+  });
+}
 
 assertDefect(
   "a missing required field",

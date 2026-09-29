@@ -26,8 +26,14 @@ function escapeRegExp(value) {
 
 function valueFor(text, label) {
   const escaped = escapeRegExp(label);
+  // Every space run here is [ \t] and the value class excludes \r\n on
+  // purpose: \s matches a line break, so a pre-fix \s* after the colon let an
+  // EMPTY field capture the next line's text and go unreported as missing.
   const colon = text.match(
-    new RegExp(`^\\s*(?:\\|\\s*)?${escaped}\\s*:\\s*(.+?)\\s*$`, "im"),
+    new RegExp(
+      `^[ \\t]*(?:\\|[ \\t]*)?${escaped}[ \\t]*:[ \\t]*([^\\r\\n]+?)[ \\t]*$`,
+      "im",
+    ),
   );
   if (colon) return colon[1].replace(/\|\s*$/, "").trim();
   const table = text.match(
