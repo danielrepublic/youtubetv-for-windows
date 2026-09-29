@@ -179,11 +179,12 @@ async function main() {
 //                --cookie-name/--cookie-value (optional, allow path only)
 //   route        --page-url (off-route), --dialog-script (csv of indexes)
 //   loadfail     --page-url (unreachable), --dialog-script
-//   profile      --profile-base, --mode=set|get, --cookie-url,
-//                --cookie-name, --cookie-value
+//   profile      --profile-base (PROGRAMDATA stand-in), --mode=set|get,
+//                --cookie-url, --cookie-name, --cookie-value,
+//                --user-key (optional deterministic key)
 //   diagnostics  --page-url (with secret query), --diagnostics-base,
 //                --auth-origin, --popup-url, --fail-url (optional),
-//                --dialog-script (optional)
+//                --dialog-script (optional), --user-key (optional)
 
 function createPolicyRecorders() {
   const externalCalls = [];
@@ -482,10 +483,29 @@ async function runLoadfailScenario() {
   });
 }
 
-// Persistent profile: activates the production profile path (real
-// app.setPath) before opening the persistent session, then sets or reads a
-// cookie. The node suite spawns this twice against the SAME base directory
-// to prove persistence, and once against a file path to prove fallback.
+// Builds the deterministic layout inputs for the profile/diagnostics
+// scenarios. `--user-key` pins the per-Windows-user segment (blanking the
+// path-shaped sources so the key is exactly sanitizeUserKey(<value>)); without
+// it the production derivation runs against the real environment.
+function profileLayout(programDataBase) {
+  const userKey = paramValue("user-key");
+  return {
+    programDataDir: programDataBase,
+    userProfile: userKey === undefined ? process.env.USERPROFILE : "",
+    homeDir: userKey === undefined ? os.homedir() : "",
+    userName: userKey ?? os.userInfo().username,
+    machineRootFallback: path.join(
+      os.tmpdir(),
+      "ytv-profile-fallback-should-not-appear",
+    ),
+  };
+}
+
+// Persistent profile: activates the production profile layout (real
+// app.setPath for BOTH sessionData and userData) before opening the persistent
+// session, then sets or reads a cookie. The node suite spawns this twice
+// against the SAME base directory to prove persistence, and once against a
+// file path to prove fallback.
 async function runProfileScenario() {
   const profileBase = paramValue("profile-base");
   const mode = paramValue("mode") ?? "get";
@@ -497,16 +517,21 @@ async function runProfileScenario() {
       "fixture-host profile: --profile-base and --cookie-url are required",
     );
   }
+  let userDataDirectory = null;
   const activation = activateProfileDirectory({
-    localAppDataDir: profileBase,
-    appDataDir: path.join(os.tmpdir(), "ytv-profile-should-not-appear"),
+    layout: profileLayout(profileBase),
     setSessionDataPath: (directory) => {
       app.setPath("sessionData", directory);
+    },
+    setUserDataPath: (directory) => {
+      userDataDirectory = directory;
+      app.setPath("userData", directory);
     },
   });
   report({
     event: "profile-activation",
     directory: activation.directory,
+    userDataDirectory,
     usedFallback: activation.usedFallback,
     guidance: activation.guidance,
   });
@@ -559,14 +584,17 @@ async function runDiagnosticsScenario() {
   }
   const repositoryRoot = repositoryRootFromHere();
   const activation = activateProfileDirectory({
-    localAppDataDir: diagnosticsBase,
-    appDataDir: path.join(os.tmpdir(), "ytv-diagnostics-should-not-appear"),
+    layout: profileLayout(diagnosticsBase),
     setSessionDataPath: (directory) => {
       app.setPath("sessionData", directory);
     },
+    setUserDataPath: (directory) => {
+      app.setPath("userData", directory);
+    },
   });
   // The production factory is the single opt-in read point: sentinel file
-  // <base>/youtubetv-for-windows/diagnostics/ENABLED present or absent.
+  // <userdir>/diagnostics/ENABLED present or absent, where <userdir> is the
+  // per-user directory that also holds the profile.
   const diagnostics = createProfileDiagnostics(activation.directory);
   report({
     event: "diagnostics-mode",

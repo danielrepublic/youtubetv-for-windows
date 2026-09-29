@@ -6,12 +6,12 @@
 
 ### 這個程式會存什麼
 
-- 瀏覽設定檔：`%LOCALAPPDATA%\youtubetv-for-windows\profile`。裡面是 YouTube TV 運作需要的東西：Cookie、快取、你的登入狀態。沒有這些，登入和偏好設定就留不住。
-- 漫遊設定：`%APPDATA%\youtubetv-for-windows`（快取與設定）。
+- 瀏覽設定檔：`%PROGRAMDATA%\youtubetv-for-windows\users\<key>\profile`。裡面是 YouTube TV 運作需要的東西：Cookie、快取、你的登入狀態。沒有這些，登入和偏好設定就留不住。
+- 使用者資料：`%PROGRAMDATA%\youtubetv-for-windows\users\<key>\userdata`（Electron 的快取與設定）。
 - 診斷紀錄：只有在你親手建立以下檔案時才會產生：
 
 ```text
-%LOCALAPPDATA%\youtubetv-for-windows\diagnostics\ENABLED
+%PROGRAMDATA%\youtubetv-for-windows\users\<key>\diagnostics\ENABLED
 ```
 
 開啟後，程式會在同目錄下寫入 `diagnostic-<時間>-p<行程>-<編號>.jsonl`。內容只有事件名稱與網域（例如 `navigation-committed` 加上 origin），不含網址路徑、查詢參數、Cookie、權杖或帳號識別。預設是關的，刪掉 `ENABLED` 就停。
@@ -35,12 +35,12 @@
 
 ### What the app stores
 
-- Browser profile: `%LOCALAPPDATA%\youtubetv-for-windows\profile`. It holds what YouTube TV needs to work: cookies, cache, and your sign-in state. Without it, sign-in and preferences can't persist.
-- Roaming settings: `%APPDATA%\youtubetv-for-windows` (caches and settings).
+- Browser profile: `%PROGRAMDATA%\youtubetv-for-windows\users\<key>\profile`. It holds what YouTube TV needs to work: cookies, cache, and your sign-in state. Without it, sign-in and preferences can't persist.
+- User data: `%PROGRAMDATA%\youtubetv-for-windows\users\<key>\userdata` (Electron's caches and settings).
 - Diagnostic logs: produced only if you create this file by hand:
 
 ```text
-%LOCALAPPDATA%\youtubetv-for-windows\diagnostics\ENABLED
+%PROGRAMDATA%\youtubetv-for-windows\users\<key>\diagnostics\ENABLED
 ```
 
 When enabled, the app writes `diagnostic-<time>-p<pid>-<n>.jsonl` next to it. Each line carries only an event name plus an origin (for example `navigation-committed` with an origin), never URL paths, query strings, cookies, tokens, or account identifiers. It's off by default; deleting `ENABLED` stops it.

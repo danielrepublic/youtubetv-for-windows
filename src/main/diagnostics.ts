@@ -9,7 +9,7 @@
 // OPT-IN (single read point): diagnostics are OFF by default. They turn on
 // only when the documented sentinel file exists:
 //
-//   %LOCALAPPDATA%\youtubetv-for-windows\diagnostics\ENABLED
+//   %PROGRAMDATA%\youtubetv-for-windows\users\<key>\diagnostics\ENABLED
 //
 // createProfileDiagnostics performs exactly ONE filesystem read of that
 // marker (`existsSync`) and returns null when it is absent. The todo 2/3
@@ -20,11 +20,11 @@
 // caller wires nothing: navigation, UA, popup and security behavior are
 // byte-identical to a non-diagnostic build.
 //
-// SINK PATH (the todo 7 uninstaller must remove the whole
-// %LOCALAPPDATA%\youtubetv-for-windows tree, which contains both this
-// directory and the todo 3 `profile` directory):
+// SINK PATH (the uninstaller removes the whole
+// %PROGRAMDATA%\youtubetv-for-windows machine tree, which contains this
+// directory and every user's profile + userdata directories):
 //
-//   %LOCALAPPDATA%\youtubetv-for-windows\diagnostics\
+//   %PROGRAMDATA%\youtubetv-for-windows\users\<key>\diagnostics\
 //       diagnostic-<YYYYMMDDThhmmssSSSZ>-p<pid>-<instance>.jsonl
 //
 // The directory is created lazily on the first record; every filesystem
@@ -330,7 +330,8 @@ export function createDiagnosticsSink(
 }
 
 // The diagnostics directory is a SIBLING of the activated profile directory:
-// both live under the per-user %LOCALAPPDATA%\youtubetv-for-windows base.
+// both live under the per-user %PROGRAMDATA%\youtubetv-for-windows\users\<key>
+// base.
 export function resolveDiagnosticsBaseDirectory(
   profileDirectory: string,
 ): string {

@@ -15,9 +15,9 @@
 ; after `initMultiUser` and BEFORE `CHECK_APP_RUNNING` and before
 ; `uninstallOldVersion` / `installApplicationFiles`, so the machine-wide
 ; install mode it re-asserts is already in effect when the first filesystem
-; or registry action runs. `customInstall` is retained as an intentionally
-; empty hook so the template's `!ifmacrodef customInstall` wiring stays
-; stable.
+; or registry action runs. `customInstall` runs at the end of the install
+; section and creates + ACLs the machine-wide application data root under
+; ProgramData (todo 7).
 ;
 ; REQUIRED INCLUDES AT INSERTION TIME (provided by installer.nsi: MUI2 ->
 ; LogicLib, multiUser.nsh -> FileFunc.nsh; the standalone harnesses include
@@ -103,6 +103,36 @@
 !define YTVW_NSIS_INCLUDE_GUARD
 
 ; ---------------------------------------------------------------------------
+; MACHINE-WIDE APPLICATION DATA ROOT (todo 7)
+;
+; The app keeps each user's Chromium profile and user-data under
+;   <machine root>\youtubetv-for-windows\users\<key>\{profile,userdata}
+; (see src/main/profile-path.ts). The root is machine-wide under ProgramData,
+; and the installer must BOTH create it and grant the local Users group
+; modify, because an elevated process creates a folder a standard user can
+; only read. The grant is done with icacls: electron-builder bundles nsExec
+; but not AccessControl.dll.
+;
+; $PROGRAMDATA is not a built-in NSIS variable in this toolchain, so the
+; environment is read at install time. `YTVW_MACHINE_ROOT`, when defined
+; before this include, overrides that read so a standalone harness can point
+; the ACL step at a scratch directory; the real build always uses the
+; ProgramData environment variable.
+;
+; ICACLS PATH: $SYSDIR is NSIS's SYSTEM directory (C:\WINDOWS\system32), NOT
+; $INSTDIR and not the install directory. It is a compile-time constant that
+; `StrCpy` cannot assign and `SetOutPath` does not move, so "$SYSDIR" names the
+; one directory guaranteed to hold icacls.exe without a PATH lookup - the
+; application install tree ships no such tool. `YTVW_ICACLS` overrides the
+; resolved path so a standalone harness can force a failing grant; the real
+; build always uses $SYSDIR\icacls.exe.
+; ---------------------------------------------------------------------------
+!ifndef YTVW_MACHINE_DIR_NAME
+  !define YTVW_MACHINE_DIR_NAME "youtubetv-for-windows"
+!endif
+!define YTVW_ACL_FAILURE_MESSAGE "無法建立或設定應用程式資料目錄的權限，安裝已中止。$\r$\nThe application data directory could not be created or its permissions granted; the installation was aborted.$\r$\n($1)$\r$\n(icacls exit $2)"
+
+; ---------------------------------------------------------------------------
 ; electron-builder hook: runs inside .onInit, after initMultiUser and before
 ; CHECK_APP_RUNNING / uninstallOldVersion / installApplicationFiles.
 ; ---------------------------------------------------------------------------
@@ -124,11 +154,49 @@
 
 ; ---------------------------------------------------------------------------
 ; electron-builder hook: runs at the end of the install section, after all
-; files/registry/shortcuts exist. It is kept defined (with an empty body) so
-; the template's `!ifmacrodef customInstall` slot still resolves; the
-; launcher update handoff that used to act here is gone.
+; files/registry/shortcuts exist. It creates the machine-wide application data
+; root under ProgramData and grants the local Users group (SID S-1-5-32-545)
+; modify with object+container inheritance on the whole tree
+; (`/grant *S-1-5-32-545:(OI)(CI)M /T /C /L`). A failed create/grant aborts the
+; install with a bilingual message; `/SD IDOK` keeps silent installs
+; non-blocking (the message is skipped there and only the nonzero exit
+; reports). Registers: $0 base root, $1 machine root, $2 failure reason or
+; icacls exit code, $3 captured icacls output, $4 the icacls executable.
 ; ---------------------------------------------------------------------------
 !macro customInstall
+  !ifdef YTVW_MACHINE_ROOT
+    StrCpy $0 "${YTVW_MACHINE_ROOT}"
+  !else
+    ReadEnvStr $0 "ProgramData"
+  !endif
+  !ifdef YTVW_ICACLS
+    StrCpy $4 "${YTVW_ICACLS}"
+  !else
+    StrCpy $4 "$SYSDIR\icacls.exe"
+  !endif
+  StrCpy $1 "$0\${YTVW_MACHINE_DIR_NAME}"
+  ${If} $0 == ""
+    ; An empty base would make both the create and the grant target a
+    ; drive-relative path. ReadEnvStr leaves $0 empty when the variable is
+    ; absent, so the guard covers both the blank and the missing case.
+    StrCpy $2 "missing ProgramData"
+  ${Else}
+    ClearErrors
+    CreateDirectory "$1"
+    ${If} ${Errors}
+      ; icacls /C continues past a missing path and still exits 0, so the
+      ; create failure is caught here instead of from icacls.
+      StrCpy $2 "cannot create root"
+    ${Else}
+      nsExec::ExecToStack '"$4" "$1" /grant *S-1-5-32-545:(OI)(CI)M /T /C /L'
+      Pop $2 ; nsExec return value: the icacls exit code
+      Pop $3 ; captured output (unused)
+    ${EndIf}
+  ${EndIf}
+  ${If} $2 != "0"
+    MessageBox MB_OK|MB_ICONSTOP "${YTVW_ACL_FAILURE_MESSAGE}" /SD IDOK
+    Abort
+  ${EndIf}
 !macroend
 
 !endif ; YTVW_NSIS_INCLUDE_GUARD

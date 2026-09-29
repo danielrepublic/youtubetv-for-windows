@@ -55,7 +55,8 @@ test("no override path exists anywhere in production source", () => {
   assert.ok(files.length > 0, "expected source files under src/");
   // NOTE: process.env is intentionally absent from this list: it is handled
   // by the dedicated environment-read test below, which bans it everywhere
-  // except the single LOCALAPPDATA read that fixes the profile convention.
+  // except the two sanctioned profile-location reads (PROGRAMDATA and
+  // USERPROFILE) that fix the per-user data layout.
   // NOTE: readFileSync is intentionally absent too: it is handled by the
   // host-surface file-read test below.
   const forbidden = [
@@ -111,7 +112,7 @@ test("host file reads cannot steer identity", () => {
   assert.deepEqual(hostViolations, []);
 });
 
-test("the only environment read is the profile-path LOCALAPPDATA convention", () => {
+test("the only environment reads are the profile-path PROGRAMDATA and USERPROFILE convention", () => {
   const profilePathFile = path.join(srcDirectory, "main", "profile-path.ts");
   const violations = [];
   for (const file of listSourceFiles()) {
@@ -123,19 +124,25 @@ test("the only environment read is the profile-path LOCALAPPDATA convention", ()
       }
       const isProfilePath = file === profilePathFile;
       const isSanctionedRead =
-        isProfilePath && /process\.env\.LOCALAPPDATA\b/.test(line);
+        isProfilePath &&
+        /process\.env\.(?:PROGRAMDATA|USERPROFILE)\b/.test(line);
       if (!isSanctionedRead) {
         violations.push(`${relative}:${index + 1}: ${line.trim()}`);
       }
     });
   }
   assert.deepEqual(violations, []);
-  // The convention itself is pinned: version-independent per-user path
-  // outside any install directory, with no version segment.
+  // The convention itself is pinned: a per-machine root under PROGRAMDATA, a
+  // per-Windows-user key segment, no version segment, and BOTH Electron data
+  // paths redirected before the first session access.
   const convention = fs.readFileSync(profilePathFile, "utf8");
-  assert.match(convention, /%LOCALAPPDATA%\\youtubetv-for-windows\\profile/);
+  assert.match(
+    convention,
+    /%PROGRAMDATA%\\youtubetv-for-windows\\users\\<key>\\profile/,
+  );
   assert.match(convention, /NO version/);
   assert.match(convention, /app\.setPath\("sessionData"/);
+  assert.match(convention, /app\.setPath\("userData"/);
 });
 
 test("the fixed identity string appears only in user-agent.ts", () => {

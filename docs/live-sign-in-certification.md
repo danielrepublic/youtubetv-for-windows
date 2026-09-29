@@ -47,7 +47,7 @@ Diagnostics are OPT-IN and OFF by default. The switch is one sentinel file
 read once at startup:
 
 ```
-%LOCALAPPDATA%\youtubetv-for-windows\diagnostics\ENABLED
+%PROGRAMDATA%\youtubetv-for-windows\users\<key>\diagnostics\ENABLED
 ```
 
 When that file is absent, the app wires no listeners at all: navigation,
@@ -55,13 +55,17 @@ user-agent, popup and security behavior are byte-identical to a non-diagnostic
 build. When it exists, the app appends JSON Lines to:
 
 ```
-%LOCALAPPDATA%\youtubetv-for-windows\diagnostics\
+%PROGRAMDATA%\youtubetv-for-windows\users\<key>\diagnostics\
     diagnostic-<YYYYMMDDThhmmssSSSZ>-p<pid>-<instance>.jsonl
 ```
 
+`<key>` is the Windows user name taken from the basename of `%USERPROFILE%`,
+sanitized to `[A-Za-z0-9._-]`; step 2 below derives it exactly.
+
 The `diagnostics` directory is a sibling of the persistent `profile` directory.
-The plan's uninstaller (todo 7) must remove the whole
-`%LOCALAPPDATA%\youtubetv-for-windows` tree, which covers both.
+The uninstaller (todo 8) must remove the whole
+`%PROGRAMDATA%\youtubetv-for-windows` tree, which covers every user's
+diagnostics, profile and userdata directories.
 
 Recorded events (complete list): `app-ready`, `app-quit`, `window-created`,
 `navigation-committed`, `load-finished`, `load-failed`, `auth-window-opened`,
@@ -102,7 +106,11 @@ Google account (2FA phone available), and a build of this repository.
 2. Enable diagnostics:
 
    ```powershell
-   $dir = Join-Path $env:LOCALAPPDATA "youtubetv-for-windows\diagnostics"
+   # The app's per-Windows-user key: basename of %USERPROFILE%, sanitized to
+   # [A-Za-z0-9._-] (src/main/profile-path.ts: sanitizeUserKey). The
+   # parentheses matter: -replace is an operator, not a Split-Path argument.
+   $key = (Split-Path -Leaf $env:USERPROFILE) -replace '[^A-Za-z0-9._-]', '_'
+   $dir = Join-Path $env:ProgramData "youtubetv-for-windows\users\$key\diagnostics"
    New-Item -ItemType Directory -Force $dir | Out-Null
    New-Item -ItemType File -Force (Join-Path $dir "ENABLED") | Out-Null
    ```

@@ -1,5 +1,5 @@
-// Pure-logic unit suite for the profile path convention and for the
-// bilingual dialog catalog. The filesystem is faked, so corrupt and
+// Pure-logic unit suite for the ProgramData profile layout convention and for
+// the bilingual dialog catalog. The filesystem is faked, so corrupt and
 // unwritable bases are exercised without touching the real disk.
 
 import assert from "node:assert/strict";
@@ -8,17 +8,31 @@ import test from "node:test";
 
 const {
   PROFILE_DIRECTORY_NAME,
+  USERS_DIRECTORY_NAME,
   PROFILE_SUBDIRECTORY_NAME,
+  USER_DATA_SUBDIRECTORY_NAME,
   SESSION_DATA_PATH_NAME,
+  USER_DATA_PATH_NAME,
   activateProfileDirectory,
   ensureFallbackProfileDirectory,
   ensureProfileDirectory,
   profileFallbackGuidance,
-  resolveProfileDirectory,
+  resolveProfileLayout,
+  sanitizeUserKey,
 } = await import("../../src/main/profile-path.ts");
 
 const { SUPPORT_RELEASE_URL, profileFallbackDialog, routeFailureDialog } =
   await import("../../src/main/dialogs.ts");
+
+// A deterministic, fully-specified layout input set. Production reads the env
+// and os; the pure resolver takes them as inputs so the mapping is testable.
+const LAYOUT_BASE = {
+  programDataDir: "C:\\ProgramData",
+  userProfile: "C:\\Users\\Ada",
+  homeDir: "C:\\Users\\Ada",
+  userName: "ada",
+  machineRootFallback: "C:\\Fallback\\AppData",
+};
 
 function fakeFileSystem(entries) {
   // entries: Map from absolute path -> "dir" | "file". mkdirSync creates
@@ -78,39 +92,93 @@ function fakeFileSystem(entries) {
   };
 }
 
-test("the resolver fixes the version-independent per-user convention", () => {
-  const resolved = resolveProfileDirectory(
-    "C:\\Users\\Ada\\AppData\\Local",
-    "FALLBACK",
+test("the resolver fixes the machine root under PROGRAMDATA and a per-user key", () => {
+  const layout = resolveProfileLayout(LAYOUT_BASE);
+  const machineRoot = path.join("C:\\ProgramData", PROFILE_DIRECTORY_NAME);
+  const userDirectory = path.join(machineRoot, USERS_DIRECTORY_NAME, "Ada");
+  assert.equal(layout.machineRoot, machineRoot);
+  assert.equal(layout.userDirectory, userDirectory);
+  assert.equal(
+    layout.profileDirectory,
+    path.join(userDirectory, PROFILE_SUBDIRECTORY_NAME),
   );
   assert.equal(
-    resolved,
-    path.join(
-      "C:\\Users\\Ada\\AppData\\Local",
-      "youtubetv-for-windows",
-      "profile",
-    ),
+    layout.userDataDirectory,
+    path.join(userDirectory, USER_DATA_SUBDIRECTORY_NAME),
   );
-  assert.ok(!resolved.match(/\d+\.\d+\.\d+/), "no version segment allowed");
-  assert.ok(!resolved.toLowerCase().includes("install"), "never under install");
-  // Blank env falls through to the appData fallback instead of a relative path.
-  assert.equal(
-    resolveProfileDirectory("", "C:\\Fallback\\AppData"),
-    path.join(
-      "C:\\Fallback\\AppData",
-      PROFILE_DIRECTORY_NAME,
-      PROFILE_SUBDIRECTORY_NAME,
-    ),
+  assert.ok(
+    !layout.profileDirectory.match(/\d+\.\d+\.\d+/),
+    "no version segment allowed",
   );
-  assert.equal(
-    resolveProfileDirectory(undefined, "C:\\Fallback\\AppData"),
-    path.join(
-      "C:\\Fallback\\AppData",
-      PROFILE_DIRECTORY_NAME,
-      PROFILE_SUBDIRECTORY_NAME,
-    ),
+  assert.ok(
+    !layout.profileDirectory.toLowerCase().includes("install"),
+    "never under install",
   );
   assert.equal(SESSION_DATA_PATH_NAME, "sessionData");
+  assert.equal(USER_DATA_PATH_NAME, "userData");
+});
+
+test("two distinct USERPROFILE values map to two distinct keys", () => {
+  const ada = resolveProfileLayout({ ...LAYOUT_BASE });
+  const bob = resolveProfileLayout({
+    ...LAYOUT_BASE,
+    userProfile: "D:\\Profiles\\Bob",
+    homeDir: "D:\\Profiles\\Bob",
+  });
+  assert.equal(path.basename(ada.userDirectory), "Ada");
+  assert.equal(path.basename(bob.userDirectory), "Bob");
+  assert.notEqual(ada.profileDirectory, bob.profileDirectory);
+  assert.notEqual(ada.userDataDirectory, bob.userDataDirectory);
+});
+
+test("a path-hostile USERPROFILE maps to a safe single-segment key", () => {
+  const layout = resolveProfileLayout({
+    ...LAYOUT_BASE,
+    userProfile: "C:\\Users\\Ada Lovelace#1",
+  });
+  const key = path.basename(layout.userDirectory);
+  assert.equal(key, "Ada_Lovelace_1");
+  assert.match(key, /^[A-Za-z0-9._-]+$/);
+  assert.ok(!key.includes("/") && !key.includes("\\"), "single path segment");
+  // The sanitizer itself keeps the safe set and neutralises everything else,
+  // and never returns an empty segment.
+  assert.equal(sanitizeUserKey("a/b\\c:d*e"), "a_b_c_d_e");
+  assert.equal(sanitizeUserKey("..."), "...");
+  assert.equal(sanitizeUserKey(""), "user");
+});
+
+test("USERPROFILE falls back to the home directory and then the user name", () => {
+  const fromHome = resolveProfileLayout({
+    ...LAYOUT_BASE,
+    userProfile: "",
+    homeDir: "D:\\Profiles\\Grace",
+  });
+  assert.equal(path.basename(fromHome.userDirectory), "Grace");
+  const fromUser = resolveProfileLayout({
+    ...LAYOUT_BASE,
+    userProfile: undefined,
+    homeDir: "",
+    userName: "Linus",
+  });
+  assert.equal(path.basename(fromUser.userDirectory), "Linus");
+});
+
+test("a blank or missing PROGRAMDATA falls back without producing a relative path", () => {
+  for (const programDataDir of ["", undefined, null]) {
+    const layout = resolveProfileLayout({
+      ...LAYOUT_BASE,
+      programDataDir,
+    });
+    assert.equal(
+      layout.machineRoot,
+      path.join("C:\\Fallback\\AppData", PROFILE_DIRECTORY_NAME),
+    );
+    assert.ok(
+      path.isAbsolute(layout.profileDirectory),
+      `a blank PROGRAMDATA must never resolve to a relative path: ${layout.profileDirectory}`,
+    );
+    assert.ok(path.isAbsolute(layout.userDataDirectory));
+  }
 });
 
 test("ensureProfileDirectory creates, validates, and reports reasons", () => {
@@ -129,63 +197,82 @@ test("ensureProfileDirectory creates, validates, and reports reasons", () => {
   assert.match(failed.reason, /cannot create/);
 });
 
-test("activateProfileDirectory sets the session path before returning", () => {
+test("activateProfileDirectory sets BOTH data paths before returning", () => {
   const fileSystem = fakeFileSystem();
-  const setPaths = [];
+  const sessionPaths = [];
+  const userDataPaths = [];
   const activation = activateProfileDirectory({
-    localAppDataDir: "C:\\Users\\Ada\\AppData\\Local",
-    appDataDir: "C:\\Fallback",
+    layout: LAYOUT_BASE,
     setSessionDataPath: (directory) => {
-      setPaths.push(directory);
+      sessionPaths.push(directory);
+    },
+    setUserDataPath: (directory) => {
+      userDataPaths.push(directory);
     },
     fileSystem,
   });
+  const userDirectory = path.join(
+    "C:\\ProgramData",
+    PROFILE_DIRECTORY_NAME,
+    USERS_DIRECTORY_NAME,
+    "Ada",
+  );
   assert.equal(activation.usedFallback, false);
   assert.equal(activation.guidance, null);
   assert.equal(
     activation.directory,
-    path.join(
-      "C:\\Users\\Ada\\AppData\\Local",
-      "youtubetv-for-windows",
-      "profile",
-    ),
+    path.join(userDirectory, PROFILE_SUBDIRECTORY_NAME),
   );
-  assert.deepEqual(setPaths, [activation.directory]);
+  assert.deepEqual(sessionPaths, [
+    path.join(userDirectory, PROFILE_SUBDIRECTORY_NAME),
+  ]);
+  assert.deepEqual(userDataPaths, [
+    path.join(userDirectory, USER_DATA_SUBDIRECTORY_NAME),
+  ]);
 });
 
-test("a corrupt base falls back to a safe new profile with guidance", () => {
+test("a corrupt base falls back to a safe new profile pair with guidance", () => {
   const fileSystem = fakeFileSystem();
   fileSystem.state.mkdirFailPrefix = "C:\\Broken";
-  const setPaths = [];
+  const sessionPaths = [];
+  const userDataPaths = [];
   const activation = activateProfileDirectory({
-    localAppDataDir: "C:\\Broken\\Local",
-    appDataDir: "C:\\Fallback",
+    layout: { ...LAYOUT_BASE, programDataDir: "C:\\Broken\\ProgramData" },
     setSessionDataPath: (directory) => {
-      setPaths.push(directory);
+      sessionPaths.push(directory);
+    },
+    setUserDataPath: (directory) => {
+      userDataPaths.push(directory);
     },
     fileSystem,
     ensureFallback: (injected) => ensureFallbackProfileDirectory(injected),
   });
   assert.equal(activation.usedFallback, true);
   assert.ok(activation.directory.includes("youtubetv-for-windows-profile-"));
-  assert.deepEqual(setPaths, [activation.directory]);
+  assert.ok(activation.directory.endsWith("profile"));
+  assert.equal(sessionPaths.length, 1);
+  assert.equal(userDataPaths.length, 1);
+  assert.notEqual(sessionPaths[0], userDataPaths[0]);
+  assert.ok(userDataPaths[0].endsWith("userdata"));
   assert.ok(activation.guidance !== null);
   assert.match(activation.guidance.zhTW, /暫時設定檔/);
   assert.match(activation.guidance.en, /temporary profile/);
-  assert.match(activation.guidance.zhTW, /C:\\Broken\\Local/);
+  assert.match(activation.guidance.zhTW, /C:\\Broken\\ProgramData/);
 });
 
 test("a file where the profile directory belongs also triggers fallback", () => {
   const target = path.join(
-    "C:\\Users\\Ada\\AppData\\Local",
-    "youtubetv-for-windows",
-    "profile",
+    "C:\\ProgramData",
+    PROFILE_DIRECTORY_NAME,
+    USERS_DIRECTORY_NAME,
+    "Ada",
+    PROFILE_SUBDIRECTORY_NAME,
   );
   const fileSystem = fakeFileSystem([[target, "file"]]);
   const activation = activateProfileDirectory({
-    localAppDataDir: "C:\\Users\\Ada\\AppData\\Local",
-    appDataDir: "C:\\Fallback",
+    layout: LAYOUT_BASE,
     setSessionDataPath: () => {},
+    setUserDataPath: () => {},
     fileSystem,
     ensureFallback: (injected) => ensureFallbackProfileDirectory(injected),
   });
@@ -199,9 +286,9 @@ test("activation throws only when even the fallback fails", () => {
   assert.throws(
     () =>
       activateProfileDirectory({
-        localAppDataDir: "C:\\Broken",
-        appDataDir: "C:\\Fallback",
+        layout: { ...LAYOUT_BASE, programDataDir: "C:\\Broken" },
         setSessionDataPath: () => {},
+        setUserDataPath: () => {},
         fileSystem,
         ensureFallback: () => ({ ok: false, reason: "disk catastrophe" }),
       }),

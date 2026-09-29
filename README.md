@@ -108,12 +108,12 @@ youtubetv-for-windows-<版本>-x64.exe
 ### 解除安裝會刪掉什麼
 
 - 用 Windows 的「設定 → 應用程式」或控制台移除程式。
-- 解除安裝會刪掉程式本身，以及你電腦上的所有相關資料：登入狀態與瀏覽設定檔（`%LOCALAPPDATA%\youtubetv-for-windows\profile`）、快取，以及漫遊設定（`%APPDATA%\youtubetv-for-windows`）。刪掉就是真的刪掉，登入要重來。
+- 解除安裝會刪掉程式本身，以及你電腦上的所有相關資料：登入狀態與瀏覽設定檔（`%PROGRAMDATA%\youtubetv-for-windows\users\<key>\profile`）、快取，以及使用者資料（`%PROGRAMDATA%\youtubetv-for-windows\users\<key>\userdata`）。刪掉就是真的刪掉，登入要重來。
 - 重新安裝不會動到設定檔，只有解除安裝會清除。
 
 ### 你的資料存在哪裡
 
-- 設定檔：`%LOCALAPPDATA%\youtubetv-for-windows\profile`（Cookie、快取、登入狀態）。
+- 設定檔：`%PROGRAMDATA%\youtubetv-for-windows\users\<key>\profile`（Cookie、快取、登入狀態）。
 - 完整說明見 [`docs/privacy.md`](docs/privacy.md)。
 
 ### 支援
@@ -227,12 +227,12 @@ There is only one way to get a new version, and it's a manual download:
 ### What uninstall removes
 
 - Remove the app through Windows Settings (Apps) or Control Panel.
-- Uninstall deletes the app plus all of its per-user data on your PC: sign-in state and browser profile (`%LOCALAPPDATA%\youtubetv-for-windows\profile`), caches, and roaming settings (`%APPDATA%\youtubetv-for-windows`). Once it's gone, you'll sign in from scratch.
+- Uninstall deletes the app plus all of its per-user data on your PC: sign-in state and browser profile (`%PROGRAMDATA%\youtubetv-for-windows\users\<key>\profile`), caches, and user data (`%PROGRAMDATA%\youtubetv-for-windows\users\<key>\userdata`). Once it's gone, you'll sign in from scratch.
 - Reinstalls keep the profile. Only uninstall wipes it.
 
 ### Where your data lives
 
-- Profile: `%LOCALAPPDATA%\youtubetv-for-windows\profile` (cookies, cache, sign-in state).
+- Profile: `%PROGRAMDATA%\youtubetv-for-windows\users\<key>\profile` (cookies, cache, sign-in state).
 - The full statement is [`docs/privacy.md`](docs/privacy.md).
 
 ### Support

@@ -22,8 +22,11 @@ const repositoryRoot = path.resolve(
 const manifest = require(path.join(repositoryRoot, "package.json"));
 
 const { SUPPORT_RELEASE_URL } = await import("../../src/main/dialogs.ts");
-const { PROFILE_DIRECTORY_NAME, PROFILE_SUBDIRECTORY_NAME } =
-  await import("../../src/main/profile-path.ts");
+const {
+  PROFILE_DIRECTORY_NAME,
+  USERS_DIRECTORY_NAME,
+  PROFILE_SUBDIRECTORY_NAME,
+} = await import("../../src/main/profile-path.ts");
 
 function readDoc(relativePath) {
   return fs.readFileSync(path.join(repositoryRoot, relativePath), "utf8");
@@ -110,11 +113,17 @@ test("the documented installer name matches package.json", () => {
 });
 
 test("the documented profile path matches profile-path.ts", () => {
-  const profileSuffix = `${PROFILE_DIRECTORY_NAME}\\${PROFILE_SUBDIRECTORY_NAME}`;
-  assert.ok(
-    readme.includes(`%LOCALAPPDATA%\\${profileSuffix}`),
-    "the README must document the exact profile directory",
-  );
+  // The programDataDir root, the per-Windows-user key level, and the profile
+  // leaf, all derived from the resolver's own exported names.
+  const documentedPath =
+    `%PROGRAMDATA%\\${PROFILE_DIRECTORY_NAME}\\${USERS_DIRECTORY_NAME}` +
+    `\\<key>\\${PROFILE_SUBDIRECTORY_NAME}`;
+  for (const half of [zhHalf, enHalf]) {
+    assert.ok(
+      half.includes(documentedPath),
+      `the README half must document the exact profile directory ${documentedPath}`,
+    );
+  }
 });
 
 test("the documented support URL matches dialogs.ts", () => {
