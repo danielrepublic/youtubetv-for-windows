@@ -20,7 +20,7 @@ Watch YouTube TV (`https://www.youtube.com/tv`) in a fullscreen Windows app.
 - 這個程式不是官方產品。它和 YouTube 或 Google 沒有任何關係，也沒有得到它們的認可或支援。
 - 這個程式沒有服務保證（no SLA）。YouTube 隨時可能改變或封鎖這類存取，到時程式可能部分或完全不能用。
 - 這個程式用一組固定的電視裝置識別（PS4 Leanback 使用者代理字串）來請求電視版頁面。這是一種裝置偽裝（device spoofing），存在風險：YouTube 可能隨時不再接受它。這裡是把它當成風險告訴你，而不是功能保證。
-- 說白了：This app is not official. There is no guarantee that sign-in, phone pairing, or 4K will keep working. There is no rollback once an update hands off to the installer.
+- 說白了：This app is not official. There is no guarantee that sign-in, phone pairing, or 4K will keep working. 資料一旦刪掉就回不來（There is no rollback for your data），重新安裝也不會找回來。
 
 ### 系統需求
 
@@ -42,7 +42,7 @@ https://github.com/danielrepublic/youtubetv-for-windows/releases/latest
 youtubetv-for-windows-<版本>-x64.exe
 ```
 
-例如 `youtubetv-for-windows-0.1.0-x64.exe`。除了這個安裝檔之外，頁面上可能還有 `.blockmap`、`latest.yml` 這類附加檔案，它們是給更新機制用的，你不需要碰。不要從其他網站、網盤或別人傳給你的檔案安裝。
+例如 `youtubetv-for-windows-0.1.0-x64.exe`。這是唯一要執行的檔案，其他東西都不用理會。不要從其他網站、網盤或別人傳給你的檔案安裝。
 
 ### 安裝
 
@@ -91,41 +91,16 @@ youtubetv-for-windows-<版本>-x64.exe
 
 即使全部符合，YouTube 仍可能因為帳號、網路或裝置識別而降畫質。4K 從來不是保證，有一就有，沒有也正常。
 
-### 更新
-
-- 每次啟動時，程式會先到發佈頁檢查有沒有新版本。檢查失敗（沒網路、逾時）不影響使用，會直接啟動目前已安裝的版本。
-- 如果新版本下載或驗證失敗，會跳出「更新失敗 / Update failed」視窗，並照常用目前版本啟動。你可以之後從發佈頁手動下載。
-- 如果更新已經交給安裝程式、但安裝結果無法確認，會在下次啟動時顯示「更新回復指引 / Update recovery guidance」，請照上面的指示手動重新下載安裝。
-- 這個程式沒有自動回復功能（There is no automatic rollback）。安裝一旦開始，就沒有「一鍵回到舊版」。
-- 實際看到的文字和程式內建對話框一字相同：
-
-```text
-更新下載或驗證失敗，將以目前已安裝的版本啟動。你仍可從下方網址手動下載最新的安裝檔。
-The update could not be downloaded or verified, so the installed version will start. You can still download the latest installer manually from the link below.
-已驗證的更新程式無法啟動，將以目前已安裝的版本啟動。你仍可從下方網址手動下載最新的安裝檔。
-The verified update installer could not be started, so the installed version will start. You can still download the latest installer manually from the link below.
-更新後的首次啟動找不到完成標記，無法確認此次安裝成功。此程式沒有自動回復功能，請以手動方式重新下載並安裝最新版本。
-The completed-install marker was not found after the update, so this installation cannot be confirmed. There is no automatic rollback; download and install the latest version manually.
-更新完成標記無效，無法確認此次安裝成功。此程式沒有自動回復功能，請以手動方式重新下載並安裝最新版本。
-The completed-install marker is invalid, so this installation cannot be confirmed. There is no automatic rollback; download and install the latest version manually.
-上次的更新在安裝階段未能完成，無法確認是否已套用。此程式沒有自動回復功能，請以手動方式重新下載並安裝最新版本。
-The previous update did not finish installing, so it cannot be confirmed whether it was applied. There is no automatic rollback; download and install the latest version manually.
-```
-
-- 誠實補充：簽章驗證用的正式金鑰還沒佈署，所以自動更新目前還不會真正生效。在那之前，請把發佈頁的手動下載當成唯一的更新方式。
-
 ### 發生問題時的處理
 
-| 狀況                                        | 怎麼做                                                                                                     |
-| ------------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
-| 「YouTube TV 無法載入 / failed to load」    | 先按「重試 (Retry)」。網路沒問題但一直失敗，可選「在瀏覽器中開啟 (Open in browser)」或「支援 (Support)」。 |
-| 「更新失敗 / Update failed」                | 按「開啟下載頁面 (Open download page)」手動下載，或按「確定 (OK)」先用目前版本。                           |
-| 「更新回復指引 / Update recovery guidance」 | 安裝結果無法確認，也沒有自動回復。請手動重新下載並安裝最新版本。                                           |
-| 設定檔損壞的提示                            | 程式會改用暫時設定檔啟動，這次的登入不會保留。檢查磁碟權限後重新啟動即可恢復。                             |
+| 狀況                                     | 怎麼做                                                                                                     |
+| ---------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
+| 「YouTube TV 無法載入 / failed to load」 | 先按「重試 (Retry)」。網路沒問題但一直失敗，可選「在瀏覽器中開啟 (Open in browser)」或「支援 (Support)」。 |
+| 設定檔損壞的提示                         | 程式會改用暫時設定檔啟動，這次的登入不會保留。檢查磁碟權限後重新啟動即可恢復。                             |
 
-### 手動下載修復
+### 換新版本
 
-任何時候覺得更新壞了，最可靠的修復就是：
+換新版本只有一條路，就是手動下載：
 
 1. 到 `https://github.com/danielrepublic/youtubetv-for-windows/releases/latest` 下載最新的 `youtubetv-for-windows-<版本>-x64.exe`。
 2. 直接執行安裝。重新安裝不會刪掉你的設定檔，登入狀態會保留。
@@ -134,12 +109,11 @@ The previous update did not finish installing, so it cannot be confirmed whether
 
 - 用 Windows 的「設定 → 應用程式」或控制台移除程式。
 - 解除安裝會刪掉程式本身，以及你電腦上的所有相關資料：登入狀態與瀏覽設定檔（`%LOCALAPPDATA%\youtubetv-for-windows\profile`）、快取，以及漫遊設定（`%APPDATA%\youtubetv-for-windows`）。刪掉就是真的刪掉，登入要重來。
-- 更新或重新安裝不會動到設定檔，只有解除安裝會清除。
+- 重新安裝不會動到設定檔，只有解除安裝會清除。
 
 ### 你的資料存在哪裡
 
 - 設定檔：`%LOCALAPPDATA%\youtubetv-for-windows\profile`（Cookie、快取、登入狀態）。
-- 更新暫存：`%LOCALAPPDATA%\youtubetv-for-windows\updates` 與 `update-status`（安裝檔暫存與完成標記，程式自己管理）。
 - 完整說明見 [`docs/privacy.md`](docs/privacy.md)。
 
 ### 支援
@@ -165,7 +139,7 @@ Please read the disclosure below before you install.
 - This app is not official. It is not affiliated with, endorsed by, or supported by YouTube or Google.
 - There is no SLA. YouTube can change or block this kind of access at any time, and the app may then partly or fully stop working.
 - The app requests the TV page with a fixed TV device identity (a PS4 Leanback user-agent string). That's device spoofing, and it's a risk, not a feature: YouTube may stop accepting it whenever it wants.
-- In plain words: This app is not official. There is no guarantee that sign-in, phone pairing, or 4K will keep working. There is no rollback once an update hands off to the installer.
+- In plain words: This app is not official. There is no guarantee that sign-in, phone pairing, or 4K will keep working. There is also no rollback for your data: once it is deleted, reinstalling does not bring it back.
 
 ### Requirements
 
@@ -187,7 +161,7 @@ On that page, only trust the asset named like this:
 youtubetv-for-windows-<version>-x64.exe
 ```
 
-For example `youtubetv-for-windows-0.1.0-x64.exe`. The page may list extra files such as `.blockmap` or `latest.yml`; those belong to the update machinery, so leave them alone. Don't install files from other sites, drives, or copies someone sent you.
+For example `youtubetv-for-windows-0.1.0-x64.exe`. That is the only file to run; nothing else there needs your attention. Don't install files from other sites, drives, or copies someone sent you.
 
 ### Install
 
@@ -236,41 +210,16 @@ You may see 2160p only when all of these hold at once:
 
 Even then, YouTube may drop quality because of the account, the network, or the device identity. 4K is never guaranteed; enjoy it when it's there.
 
-### Updates
-
-- On every launch, the app checks the release page for a newer version first. If the check fails (offline, timeout), it just starts the installed version.
-- If a new version can't be downloaded or verified, you'll see an "更新失敗 / Update failed" dialog, and the installed version starts as usual. You can download the release by hand later.
-- If an update was handed to the installer but the result can't be confirmed, the next launch shows "更新回復指引 / Update recovery guidance". Follow it and reinstall the latest version manually.
-- There is no rollback (There is no automatic rollback). Once the installer starts, there's no one-click way back to the old version.
-- The exact wording matches the built-in dialogs word for word:
-
-```text
-更新下載或驗證失敗，將以目前已安裝的版本啟動。你仍可從下方網址手動下載最新的安裝檔。
-The update could not be downloaded or verified, so the installed version will start. You can still download the latest installer manually from the link below.
-已驗證的更新程式無法啟動，將以目前已安裝的版本啟動。你仍可從下方網址手動下載最新的安裝檔。
-The verified update installer could not be started, so the installed version will start. You can still download the latest installer manually from the link below.
-更新後的首次啟動找不到完成標記，無法確認此次安裝成功。此程式沒有自動回復功能，請以手動方式重新下載並安裝最新版本。
-The completed-install marker was not found after the update, so this installation cannot be confirmed. There is no automatic rollback; download and install the latest version manually.
-更新完成標記無效，無法確認此次安裝成功。此程式沒有自動回復功能，請以手動方式重新下載並安裝最新版本。
-The completed-install marker is invalid, so this installation cannot be confirmed. There is no automatic rollback; download and install the latest version manually.
-上次的更新在安裝階段未能完成，無法確認是否已套用。此程式沒有自動回復功能，請以手動方式重新下載並安裝最新版本。
-The previous update did not finish installing, so it cannot be confirmed whether it was applied. There is no automatic rollback; download and install the latest version manually.
-```
-
-- One honest caveat: the production release-signing key isn't provisioned yet, so signed automatic updates can't actually verify in production. Until then, treat a manual download from the release page as the only update path.
-
 ### When something goes wrong
 
-| Symptom                                   | What to do                                                                                                                     |
-| ----------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
-| "YouTube TV 無法載入 / failed to load"    | Try "重試 (Retry)" first. If it keeps failing with a fine network, use "在瀏覽器中開啟 (Open in browser)" or "支援 (Support)". |
-| "更新失敗 / Update failed"                | Click "開啟下載頁面 (Open download page)" to fetch it manually, or "確定 (OK)" to keep the current version.                    |
-| "更新回復指引 / Update recovery guidance" | The install can't be confirmed, and there is no automatic rollback. Download and install the latest version manually.          |
-| A profile-corruption notice               | The app starts with a temporary profile instead, and sign-in won't persist this time. Check disk permissions and restart.      |
+| Symptom                                | What to do                                                                                                                     |
+| -------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
+| "YouTube TV 無法載入 / failed to load" | Try "重試 (Retry)" first. If it keeps failing with a fine network, use "在瀏覽器中開啟 (Open in browser)" or "支援 (Support)". |
+| A profile-corruption notice            | The app starts with a temporary profile instead, and sign-in won't persist this time. Check disk permissions and restart.      |
 
-### Manual-download recovery
+### Getting a new version
 
-Whenever an update looks broken, the most reliable fix is:
+There is only one way to get a new version, and it's a manual download:
 
 1. Go to `https://github.com/danielrepublic/youtubetv-for-windows/releases/latest` and grab the newest `youtubetv-for-windows-<version>-x64.exe`.
 2. Run it. Reinstalling keeps your profile, so sign-in state survives.
@@ -279,12 +228,11 @@ Whenever an update looks broken, the most reliable fix is:
 
 - Remove the app through Windows Settings (Apps) or Control Panel.
 - Uninstall deletes the app plus all of its per-user data on your PC: sign-in state and browser profile (`%LOCALAPPDATA%\youtubetv-for-windows\profile`), caches, and roaming settings (`%APPDATA%\youtubetv-for-windows`). Once it's gone, you'll sign in from scratch.
-- Updates and reinstalls keep the profile. Only uninstall wipes it.
+- Reinstalls keep the profile. Only uninstall wipes it.
 
 ### Where your data lives
 
 - Profile: `%LOCALAPPDATA%\youtubetv-for-windows\profile` (cookies, cache, sign-in state).
-- Update scratch: `%LOCALAPPDATA%\youtubetv-for-windows\updates` and `update-status` (pending installers and completion markers, managed by the app).
 - The full statement is [`docs/privacy.md`](docs/privacy.md).
 
 ### Support

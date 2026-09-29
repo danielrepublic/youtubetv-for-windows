@@ -26,7 +26,7 @@ SHA-256：`[填入安裝檔的 SHA-256]`
 
 ### 風險聲明（不要刪除）
 
-這個程式不是官方產品，和 YouTube 或 Google 沒有任何關係（not official）。它沒有服務保證，YouTube 隨時可能改變或封鎖存取。更新一旦交給安裝程式就沒有自動回復（no rollback），失敗時請手動重新下載安裝。
+這個程式不是官方產品，和 YouTube 或 Google 沒有任何關係（not official）。它沒有服務保證，YouTube 隨時可能改變或封鎖存取。新版本一律手動下載安裝；資料刪掉就回不來（no rollback）。
 
 ## English
 
@@ -50,4 +50,4 @@ SHA-256: `[installer SHA-256 here]`
 
 ### Risk disclosure (do not delete)
 
-This app is not official and is not affiliated with YouTube or Google. There is no SLA, and YouTube may change or block access at any time. There is no rollback (no automatic rollback) once an update hands off to the installer; on failure, download and install the latest version manually.
+This app is not official and is not affiliated with YouTube or Google. There is no SLA, and YouTube may change or block access at any time. New versions are manual downloads, and there is no rollback (no automatic rollback) for data you delete.
