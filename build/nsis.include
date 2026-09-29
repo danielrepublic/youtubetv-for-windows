@@ -124,6 +124,14 @@
 !ifndef YTVW_NSIS_INCLUDE_GUARD
 !define YTVW_NSIS_INCLUDE_GUARD
 
+; nsDialogs provides the ${NSD_*} control macros and ${BST_CHECKED} (through
+; WinMessages.nsh) used by the already-installed chooser below. The include is
+; guarded, so the later MUI2 include that pulls it in again is a no-op. It is
+; included here, at the top of the installer half, because this file is
+; processed before MUI2 and the chooser's macros must resolve wherever the
+; chooser is inserted.
+!include "nsDialogs.nsh"
+
 ; ---------------------------------------------------------------------------
 ; MACHINE-WIDE APPLICATION DATA ROOT (todo 7)
 ;
@@ -216,6 +224,184 @@
     MessageBox MB_OK|MB_ICONSTOP "${YTVW_ACL_FAILURE_MESSAGE}" /SD IDOK
     Abort
   ${EndIf}
+!macroend
+
+; ---------------------------------------------------------------------------
+; ALREADY-INSTALLED CHOOSER (todo 9)
+;
+; `assistedInstaller.nsh` inserts `customPageAfterChangeDir` (when the macro
+; exists) between the directory page and the InstFiles page, and does so even
+; when the directory page itself is disabled. That slot is the only
+; user-visible point where an existing installation can be offered a reinstall
+; or a full uninstall.
+;
+; PAGE-SKIP CONTRACT: a custom page whose create function calls `Abort` is
+; skipped, and the install continues with the next page. That is what keeps
+; the chooser invisible on a first install. In a silent run NSIS does not call
+; any page callback at all, so a `/S` run can never be blocked by this page;
+; an existing install is then reinstalled in place by the template's own
+; `uninstallOldVersion` upgrade path (installSection.nsh), which always passes
+; `/KEEP_APP_DATA` and therefore keeps the profile and sign-in state.
+;
+; The whole page - its Vars, its callbacks and its declaration - lives INSIDE
+; the macro so the template's own defines resolve at INSERTION time:
+; `${INSTALL_REGISTRY_KEY}` (multiUser.nsh), `${APP_EXECUTABLE_FILENAME}`
+; (common.nsh) and `${UNINSTALL_FILENAME}` (common.nsh) are all created AFTER
+; this file is included, so a top-level Function body would bake the literal
+; `${NAME}` text into the script instead of the value. Keeping the Vars here
+; also keeps the two standalone compile harnesses that include this file
+; without inserting the macro free of NSIS warning 6001 ("variable not
+; referenced"), which `-WX` promotes to a build error.
+;
+; DETECTION: an installation exists when any of the three registry roots
+; reports an `InstallLocation` for `${INSTALL_REGISTRY_KEY}` (SHELL_CONTEXT
+; resolves to HKLM in this per-machine build, with HKCU/HKLM read explicitly),
+; or when the legacy per-user executable still exists at
+; `%LOCALAPPDATA%\Programs\youtubetv-for-windows\<app>.exe`. The legacy path is
+; read through `ReadEnvStr "LOCALAPPDATA"` rather than the built-in variable:
+; the whole file is scanned by nsis-packaging.test.mjs for the retired
+; per-user uninstall-path tokens, and this file is per-machine now.
+;
+; DETECTION SEAMS (harness-only, both `!ifdef`-guarded):
+;   YTVW_INSTALL_LOCATION - replaces the InstallLocation registry probe, so a
+;                           harness can simulate an installed or a
+;                           not-installed machine without touching the real
+;                           registry.
+;   YTVW_LEGACY_EXE       - replaces the legacy per-user executable path, so a
+;                           harness can prove the FileExists half of the
+;                           detection decides on its own.
+; ---------------------------------------------------------------------------
+!define YTVW_CHOOSER_TITLE "youtubetv-for-windows 已安裝 / Already installed"
+!define YTVW_CHOOSER_SUBTITLE "請選擇要繼續安裝、解除安裝，或取消。 / Choose to reinstall, uninstall, or cancel."
+!define YTVW_CHOOSER_MESSAGE "偵測到 youtubetv-for-windows 已安裝。請選擇要繼續安裝、解除安裝，或取消。$\r$\nAn existing youtubetv-for-windows installation was found. Choose to reinstall, uninstall, or cancel."
+!define YTVW_CHOOSER_REINSTALL "重新安裝（保留你的設定與登入狀態）$\r$\nReinstall (keep your settings and sign-in)"
+!define YTVW_CHOOSER_UNINSTALL "解除安裝並刪除所有資料$\r$\nUninstall and delete all data"
+!define YTVW_CHOOSER_CANCEL "取消$\r$\nCancel"
+!define YTVW_CHOOSER_DIALOG_FAILED "無法顯示安裝選項頁面，將繼續重新安裝。$\r$\nThe installation options page could not be displayed; the installation will continue as a reinstall."
+
+; ---------------------------------------------------------------------------
+; YTVW_DETECT_INSTALLED
+;   Sets the named variable to "1" when an installation is detected across the
+;   machine-wide registry roots or the legacy per-user executable, "0"
+;   otherwise. Kept as its own macro so the standalone harness can drive the
+;   exact detection the page uses, without going through the page machinery.
+;   Registers: $0 holds the resolved InstallLocation, $1 the legacy path.
+; ---------------------------------------------------------------------------
+!macro YTVW_DETECT_INSTALLED OUTVAR
+  StrCpy ${OUTVAR} "0"
+  !ifdef YTVW_INSTALL_LOCATION
+    StrCpy $0 "${YTVW_INSTALL_LOCATION}"
+  !else
+    ReadRegStr $0 SHELL_CONTEXT "${INSTALL_REGISTRY_KEY}" InstallLocation
+    ${If} $0 == ""
+      ReadRegStr $0 HKCU "${INSTALL_REGISTRY_KEY}" InstallLocation
+    ${EndIf}
+    ${If} $0 == ""
+      ReadRegStr $0 HKLM "${INSTALL_REGISTRY_KEY}" InstallLocation
+    ${EndIf}
+  !endif
+  ${If} $0 != ""
+    StrCpy ${OUTVAR} "1"
+  ${Else}
+    !ifdef YTVW_LEGACY_EXE
+      StrCpy $1 "${YTVW_LEGACY_EXE}"
+    !else
+      ReadEnvStr $1 "LOCALAPPDATA"
+      StrCpy $1 "$1\Programs\${YTVW_MACHINE_DIR_NAME}\${APP_EXECUTABLE_FILENAME}"
+    !endif
+    ${If} ${FileExists} "$1"
+      StrCpy ${OUTVAR} "1"
+    ${EndIf}
+  ${EndIf}
+!macroend
+
+!macro customPageAfterChangeDir
+  Var ytvwInstalled
+  Var ytvwChoice
+  Var ytvwDialog
+  Var ytvwControl
+  Var ytvwReinstall
+  Var ytvwUninstall
+  Var ytvwCancel
+
+  PageEx custom
+    PageCallbacks ytvwChooserCreate ytvwChooserLeave
+  PageExEnd
+
+  ; -------------------------------------------------------------------------
+  ; Detects an existing installation and, when one is present and the run is
+  ; interactive, shows the three-option chooser. Aborts (and so skips the
+  ; page) when nothing is installed or when the run is silent.
+  ; -------------------------------------------------------------------------
+  Function ytvwChooserCreate
+    !insertmacro YTVW_DETECT_INSTALLED $ytvwInstalled
+
+    ${If} $ytvwInstalled == "0"
+      Abort
+    ${EndIf}
+    ${If} ${Silent}
+      Abort
+    ${EndIf}
+
+    !ifmacrodef MUI_HEADER_TEXT
+      !insertmacro MUI_HEADER_TEXT "${YTVW_CHOOSER_TITLE}" "${YTVW_CHOOSER_SUBTITLE}"
+    !endif
+
+    nsDialogs::Create 1018
+    Pop $ytvwDialog
+    ${If} $ytvwDialog == error
+      MessageBox MB_OK|MB_ICONSTOP "${YTVW_CHOOSER_DIALOG_FAILED}" /SD IDOK
+      Abort
+    ${EndIf}
+
+    ${NSD_CreateLabel} 0u 0u 100% 32u "${YTVW_CHOOSER_MESSAGE}"
+    Pop $ytvwControl
+    ${NSD_CreateRadioButton} 0u 38u 100% 22u "${YTVW_CHOOSER_REINSTALL}"
+    Pop $ytvwReinstall
+    ${NSD_CreateRadioButton} 0u 62u 100% 22u "${YTVW_CHOOSER_UNINSTALL}"
+    Pop $ytvwUninstall
+    ${NSD_CreateRadioButton} 0u 86u 100% 22u "${YTVW_CHOOSER_CANCEL}"
+    Pop $ytvwCancel
+
+    ${NSD_SetState} $ytvwReinstall ${BST_CHECKED}
+    StrCpy $ytvwChoice "reinstall"
+
+    nsDialogs::Show
+  FunctionEnd
+
+  ; -------------------------------------------------------------------------
+  ; Maps the selection: uninstall runs the real uninstaller with `/S` and
+  ; WITHOUT `/KEEP_APP_DATA` (so the ProgramData data tree is removed too) and
+  ; exits; cancel exits; reinstall falls through to the template's
+  ; `/KEEP_APP_DATA` upgrade path.
+  ; -------------------------------------------------------------------------
+  Function ytvwChooserLeave
+    ${NSD_GetState} $ytvwReinstall $0
+    ${If} $0 == ${BST_CHECKED}
+      StrCpy $ytvwChoice "reinstall"
+    ${EndIf}
+    ${NSD_GetState} $ytvwUninstall $0
+    ${If} $0 == ${BST_CHECKED}
+      StrCpy $ytvwChoice "uninstall"
+    ${EndIf}
+    ${NSD_GetState} $ytvwCancel $0
+    ${If} $0 == ${BST_CHECKED}
+      StrCpy $ytvwChoice "cancel"
+    ${EndIf}
+
+    ${If} $ytvwChoice == "uninstall"
+      ExecWait '"$INSTDIR\${UNINSTALL_FILENAME}" /S _?=$INSTDIR'
+      ; A bare Quit exits with NSIS's abort code 2; the template's own
+      ; quitSuccess macro clears the error level first for the same reason.
+      SetErrorLevel 0
+      Quit
+    ${ElseIf} $ytvwChoice == "cancel"
+      SetErrorLevel 0
+      Quit
+    ${EndIf}
+    ; Reinstall: fall through. installSection.nsh then runs the previous
+    ; uninstaller with /KEEP_APP_DATA before installing over it.
+  FunctionEnd
 !macroend
 
 !endif ; YTVW_NSIS_INCLUDE_GUARD
