@@ -66,6 +66,21 @@ jobs:
             throw "Refusing to overwrite existing release $env:GITHUB_REF_NAME"
           }
 
+      # The record lives under docs/, but its documented attachment path
+      # (release-evidence/certification/<version>-<date>/) is repo-root
+      # relative and the guard resolves attachments relative to the record
+      # file. Copying the record to the repo root keeps the documented path
+      # working as written without changing the guard's default behaviour.
+      # No secret is exposed here on purpose: this step only reads the
+      # record and its evidence, so an uncertified candidate can never reach
+      # signing or publication.
+      - name: Verify the live release certification record
+        shell: pwsh
+        run: |
+          $version = (Get-Content package.json -Raw | ConvertFrom-Json).version
+          Copy-Item docs/release-certification.md ./certification-record.md
+          node scripts/verify-certification.cjs ./certification-record.md --candidate-version $version
+
       - name: Sign the exact upload asset set
         shell: pwsh
         env:

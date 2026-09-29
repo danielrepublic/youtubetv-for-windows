@@ -40,6 +40,8 @@ const expectedAssets = [
 const SIGNING_STEP = "Sign the exact upload asset set";
 const REVERIFY_STEP = "Re-verify the staged assets immediately before upload";
 const PUBLISH_STEP = "Publish immutable GitHub Release assets";
+const CERTIFICATION_STEP = "Verify the live release certification record";
+const REFUSE_STEP = "Refuse to overwrite an existing release version";
 const API_RELEASE_URL =
   "https://api.github.com/repos/danielrepublic/youtubetv-for-windows/releases/1";
 const RELEASES_LATEST_URL =
@@ -201,6 +203,41 @@ function validateReleaseWorkflow(source) {
   const signingIndex = source.indexOf(`      - name: ${SIGNING_STEP}\n`);
   const reverifyIndex = source.indexOf(`      - name: ${REVERIFY_STEP}\n`);
   const publishIndex = source.indexOf(`      - name: ${PUBLISH_STEP}\n`);
+  const guardStep = stepBlock(source, CERTIFICATION_STEP);
+  const guardIndex = source.indexOf(`      - name: ${CERTIFICATION_STEP}\n`);
+  const refuseIndex = source.indexOf(`      - name: ${REFUSE_STEP}\n`);
+  failureIf(
+    guardStep === undefined ||
+      !/scripts\/verify-certification\.cjs/.test(guardStep),
+    "publish must gate stable publication on the live certification guard",
+    failures,
+  );
+  failureIf(
+    guardStep === undefined ||
+      !/--candidate-version/.test(guardStep) ||
+      !/package\.json/.test(guardStep),
+    "the certification guard must receive the candidate version from package.json",
+    failures,
+  );
+  failureIf(
+    guardIndex < 0 ||
+      refuseIndex < 0 ||
+      !(guardIndex > refuseIndex) ||
+      !(guardIndex < signingIndex) ||
+      !(guardIndex < publishIndex),
+    "the certification guard must run after the release-overwrite refusal and before signing or publication",
+    failures,
+  );
+  failureIf(
+    guardStep !== undefined && /continue-on-error:\s*true/.test(guardStep),
+    "the certification guard must fail the publish job when certification is incomplete",
+    failures,
+  );
+  failureIf(
+    guardStep !== undefined && guardStep.includes("secrets."),
+    "the certification guard step must not receive any secret",
+    failures,
+  );
   const reverifyStep = stepBlock(source, REVERIFY_STEP);
   failureIf(
     signingIndex < 0 ||
@@ -450,6 +487,25 @@ test("each required workflow policy defect fails in a byte-restored scratch copy
           "",
         ),
       expected: /must be re-verified after signing and before publication/,
+    },
+    {
+      name: "certification guard removed from the publish path",
+      mutate: (source) => {
+        const guardStep = stepBlock(source, CERTIFICATION_STEP);
+        assert.ok(guardStep, "the certification guard step must exist");
+        return replaceOnce(source, guardStep, "");
+      },
+      expected: /live certification guard/,
+    },
+    {
+      name: "certification guard given the signing secret",
+      mutate: (source) =>
+        replaceOnce(
+          source,
+          `      - name: ${CERTIFICATION_STEP}\n        shell: pwsh\n`,
+          `      - name: ${CERTIFICATION_STEP}\n        shell: pwsh\n        env:\n          RELEASE_ED25519_PRIVATE_KEY: \${{ secrets.RELEASE_ED25519_PRIVATE_KEY }}\n`,
+        ),
+      expected: /certification guard step must not receive any secret/,
     },
     {
       name: "re-verification given the signing secret",
