@@ -7,13 +7,19 @@
 // `customInstall` hook through standalone makensis compiles and asserts the
 // resulting ACL on disk - not the text of the macro.
 //
-// Every harness sets `InstallDir` to an empty scratch directory, which is the
-// production condition: in a real per-machine build $SYSDIR is the install
-// directory (`$PROGRAMFILES64\youtubetv-for-windows`) and ships no icacls.exe.
-// A harness without `InstallDir` silently defaults $SYSDIR to the system
-// directory, so resolving the tool from $SYSDIR would pass here and abort on
-// every real machine. Fixing InstallDir is what makes this suite able to see
-// that class of bug.
+// Every harness sets `InstallDir` and `$INSTDIR` to an empty scratch
+// directory, so the compiled installer mirrors the real per-machine
+// condition.
+//
+// `$SYSDIR\icacls.exe` is the correct tool path. In NSIS 3 $SYSDIR is a
+// COMPILE-TIME CONSTANT holding the Windows SYSTEM directory
+// (C:\WINDOWS\system32): it is independent of $INSTDIR and is not moved by
+// `InstallDir` nor by `SetOutPath $INSTDIR` (installSection.nsh:60).
+// electron-builder's own allowOnlyOneInstallerInstance.nsh resolves
+// cmd.exe, findstr.exe, and powershell.exe through $SYSDIR for the same
+// reason. The suite's value is therefore not that it finds the tool, but
+// that it asserts the resolved path EXISTS instead of trusting the
+// register's name.
 //
 // Covered:
 //   - the real define set compiles under -WX (electron-builder passes
