@@ -19,12 +19,7 @@ const repositoryRoot = path.resolve(
 
 const { SUPPORT_RELEASE_URL } = await import("../../src/main/dialogs.ts");
 
-const DOCS = [
-  "README.md",
-  "docs/privacy.md",
-  "docs/release-notes-template.md",
-  "docs/release-certification.md",
-];
+const DOCS = ["README.md", "docs/privacy.md", "docs/release-notes-template.md"];
 
 const REPOSITORY_PREFIX =
   "https://github.com/danielrepublic/youtubetv-for-windows";

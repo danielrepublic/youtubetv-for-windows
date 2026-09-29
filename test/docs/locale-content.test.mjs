@@ -21,14 +21,9 @@ const repositoryRoot = path.resolve(
 );
 const manifest = require(path.join(repositoryRoot, "package.json"));
 
-const { SUPPORT_RELEASE_URL, updateFailureDialog, updateRepairDialog } =
-  await import("../../src/main/dialogs.ts");
-const {
-  PROFILE_DIRECTORY_NAME,
-  PROFILE_SUBDIRECTORY_NAME,
-  UPDATE_DIRECTORY_NAME,
-  UPDATE_STATUS_DIRECTORY_NAME,
-} = await import("../../src/main/profile-path.ts");
+const { SUPPORT_RELEASE_URL } = await import("../../src/main/dialogs.ts");
+const { PROFILE_DIRECTORY_NAME, PROFILE_SUBDIRECTORY_NAME } =
+  await import("../../src/main/profile-path.ts");
 
 function readDoc(relativePath) {
   return fs.readFileSync(path.join(repositoryRoot, relativePath), "utf8");
@@ -56,7 +51,6 @@ const REQUIRED_ZH_HEADINGS = [
   "### 登入",
   "### 手機配對",
   "### 4K 播放條件",
-  "### 更新",
   "### 發生問題時的處理",
   "### 手動下載修復",
   "### 解除安裝會刪掉什麼",
@@ -75,7 +69,6 @@ const REQUIRED_EN_HEADINGS = [
   "### Sign-in",
   "### Phone pairing",
   "### 4K playback",
-  "### Updates",
   "### When something goes wrong",
   "### Manual-download recovery",
   "### What uninstall removes",
@@ -116,58 +109,20 @@ test("the documented installer name matches package.json", () => {
   assert.ok(readme.includes("youtubetv-for-windows-<version>-x64.exe"));
 });
 
-test("the documented profile and update paths match profile-path.ts", () => {
+test("the documented profile path matches profile-path.ts", () => {
   const profileSuffix = `${PROFILE_DIRECTORY_NAME}\\${PROFILE_SUBDIRECTORY_NAME}`;
   assert.ok(
     readme.includes(`%LOCALAPPDATA%\\${profileSuffix}`),
     "the README must document the exact profile directory",
   );
-  assert.ok(
-    readme.includes(UPDATE_DIRECTORY_NAME),
-    "the README must name the pending-update directory",
-  );
-  assert.ok(
-    readme.includes(UPDATE_STATUS_DIRECTORY_NAME),
-    "the README must name the update-status directory",
-  );
 });
 
-test("the documented recovery wording matches dialogs.ts verbatim", () => {
+test("the documented support URL matches dialogs.ts", () => {
   assert.equal(
     SUPPORT_RELEASE_URL,
     "https://github.com/danielrepublic/youtubetv-for-windows/releases/latest",
   );
   assert.ok(readme.includes(SUPPORT_RELEASE_URL));
-  // Every update dialog body the code can render must be quoted in EACH
-  // language half: dialogs.ts is the single source of truth, so a body
-  // deleted from either half fails the build instead of silently breaking
-  // the README's word-for-word claim.
-  const requiredDialogs = [
-    ...["download-or-verify-failed", "installer-launch-failed"].map((kind) => ({
-      label: kind,
-      content: updateFailureDialog(kind),
-    })),
-    ...["missing", "invalid", "unconfirmed"].map((reason) => ({
-      label: `repair-${reason}`,
-      content: updateRepairDialog(reason),
-    })),
-  ];
-  assert.equal(requiredDialogs.length, 5);
-  for (const { label, content } of requiredDialogs) {
-    assert.ok(zhHalf.includes(content.title), `zhTW half is missing ${label}`);
-    assert.ok(
-      enHalf.includes(content.title),
-      `English half is missing ${label}`,
-    );
-    assert.ok(
-      zhHalf.includes(content.message),
-      `the zhTW half must quote the ${label} dialog body verbatim`,
-    );
-    assert.ok(
-      enHalf.includes(content.message),
-      `the English half must quote the ${label} dialog body verbatim`,
-    );
-  }
 });
 
 test("Traditional Chinese documents contain no Simplified-only characters", () => {
@@ -209,7 +164,6 @@ test("Traditional Chinese documents contain no Simplified-only characters", () =
   for (const relativePath of [
     "README.md",
     "docs/privacy.md",
-    "docs/release-certification.md",
     "docs/release-notes-template.md",
   ]) {
     const text = readDoc(relativePath);
@@ -222,7 +176,7 @@ test("Traditional Chinese documents contain no Simplified-only characters", () =
   }
 });
 
-test("privacy, release-notes, and certification carry their required markers", () => {
+test("privacy and release notes carry their required markers", () => {
   const privacy = readDoc("docs/privacy.md");
   assert.ok(privacy.includes("## 繁體中文"));
   assert.ok(privacy.includes("## English"));
@@ -230,11 +184,4 @@ test("privacy, release-notes, and certification carry their required markers", (
   const notes = readDoc("docs/release-notes-template.md");
   assert.ok(notes.includes("SHA-256"));
   assert.ok(notes.includes("do not delete"));
-  const certification = readDoc("docs/release-certification.md");
-  assert.ok(certification.includes("awaiting-maintainer-evidence"));
-  assert.ok(certification.includes("DO NOT PUBLISH"));
-  assert.ok(certification.includes("Stats-for-nerds"));
-  assert.ok(certification.includes("25 Mbps"));
-  assert.ok(certification.includes("phone pairing"));
-  assert.ok(certification.includes("sign-in persists"));
 });

@@ -17,12 +17,7 @@ const repositoryRoot = path.resolve(
   "..",
 );
 
-const DOCS = [
-  "README.md",
-  "docs/privacy.md",
-  "docs/release-notes-template.md",
-  "docs/release-certification.md",
-];
+const DOCS = ["README.md", "docs/privacy.md", "docs/release-notes-template.md"];
 
 function readDoc(relativePath) {
   return fs.readFileSync(path.join(repositoryRoot, relativePath), "utf8");

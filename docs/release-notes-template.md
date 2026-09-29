@@ -22,7 +22,6 @@ SHA-256：`[填入安裝檔的 SHA-256]`
 ### 已知限制
 
 - 安裝檔未簽署，Windows SmartScreen 會跳出警告，處理方式見 README「SmartScreen 警告」。
-- 自動更新用的正式簽章金鑰[已佈署 / 尚未佈署]。尚未佈署時，請使用者從本頁手動下載。
 - 4K、登入、手機配對都不保證，條件見 README。
 
 ### 風險聲明（不要刪除）
@@ -47,7 +46,6 @@ SHA-256: `[installer SHA-256 here]`
 ### Known limits
 
 - The installer is unsigned, so Windows SmartScreen will warn; see "About the SmartScreen warning" in the README.
-- The production release-signing key is [provisioned / not yet provisioned]. Until it is, users should download from this page by hand.
 - 4K, sign-in, and phone pairing carry no guarantee; see the README for conditions.
 
 ### Risk disclosure (do not delete)
