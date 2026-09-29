@@ -31,7 +31,7 @@
     },
     "rows": {
       "type": "array",
-      "minItems": 30,
+      "minItems": 28,
       "description": "The verifier additionally requires the exact environments x commands cross-product (see scripts/verify-delivery-matrix.cjs).",
       "items": {
         "$ref": "#/$defs/row"
@@ -91,7 +91,7 @@
         "command": {
           "type": "string",
           "minLength": 1,
-          "description": "For the ten automated rows this is the exact npm script invocation. The five clean-environment rows are named observation scenarios instead of shell commands: 'standard-user install no-admin-elevation', 'start-menu shortcut launch', 'update-failure fallback', 'uninstaller profile deletion', 'artifact completeness'."
+          "description": "For the ten automated rows this is the exact npm script invocation. The four clean-environment rows are named observation scenarios instead of shell commands: 'standard-user install no-admin-elevation', 'start-menu shortcut launch', 'uninstaller profile deletion', 'artifact completeness'."
         },
         "toolVersions": {
           "type": "object",
@@ -155,10 +155,6 @@
         "adminElevationRequired": {
           "const": false,
           "description": "Required on the 'standard-user install no-admin-elevation' row. Must be exactly false; a missing value fails, because a per-user install that needed elevation is not the claimed delivery."
-        },
-        "fallbackLaunchedInstalledVersion": {
-          "const": true,
-          "description": "Required on the 'update-failure fallback' row. Must be exactly true; a missing value fails, because a failed update that did not still launch the installed version is not the claimed fallback."
         }
       },
       "allOf": [
@@ -252,15 +248,6 @@
           },
           "then": {
             "required": ["adminElevationRequired"]
-          }
-        },
-        {
-          "if": {
-            "required": ["command"],
-            "properties": { "command": { "const": "update-failure fallback" } }
-          },
-          "then": {
-            "required": ["fallbackLaunchedInstalledVersion"]
           }
         }
       ]

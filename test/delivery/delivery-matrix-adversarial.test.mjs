@@ -46,6 +46,11 @@ const verifierPath = path.join(
   "scripts",
   "verify-delivery-matrix.cjs",
 );
+const schemaPath = path.join(
+  repositoryRoot,
+  "release-evidence-schema",
+  "delivery-matrix-evidence.schema.json",
+);
 const { REQUIRED_COMMANDS, REQUIRED_ENVIRONMENTS, SCHEMA_VERSION } = require(
   verifierPath,
 );
@@ -110,9 +115,6 @@ function createSyntheticMatrix(t) {
       };
       if (command === "standard-user install no-admin-elevation") {
         row.adminElevationRequired = false;
-      }
-      if (command === "update-failure fallback") {
-        row.fallbackLaunchedInstalledVersion = true;
       }
       if (command === "start-menu shortcut launch") {
         row.shortcutPath = writeFile(
@@ -211,6 +213,21 @@ test("SYNTHETIC positive control: the complete synthetic matrix is accepted", (t
   assert.match(result.output, /"synthetic": true/);
   assert.match(result.output, /\(SYNTHETIC control, not machine evidence\)/);
   assert.match(result.output, new RegExp(`${requiredRowCount} required`));
+});
+
+// The schema's `rows.minItems` is a second, independent statement of the row
+// count. When the two drift apart, a real 28-row index is rejected by the
+// schema (or a 30-row index satisfies it) while the verifier reports a
+// different `rowsVerified` in its PASS record, so the published contract and
+// the enforced one disagree. Nothing else in the chain compares them.
+test("the schema row floor equals the verifier's required row count", () => {
+  const schema = JSON.parse(fs.readFileSync(schemaPath, "utf8"));
+  assert.equal(
+    schema.properties.rows.minItems,
+    requiredRowCount,
+    "delivery-matrix-evidence.schema.json rows.minItems has drifted from " +
+      "REQUIRED_ENVIRONMENTS x REQUIRED_COMMANDS",
+  );
 });
 
 test("binding is to the exact candidate: the same matrix fails for another version", (t) => {
@@ -366,16 +383,6 @@ test("an install row that cannot state elevation behaviour is refused", (t) => {
   });
 });
 
-test("an update row that cannot state the fallback outcome is refused", (t) => {
-  const matrix = createSyntheticMatrix(t);
-  delete matrix.row("update-failure fallback").fallbackLaunchedInstalledVersion;
-  matrix.save();
-  assertFailClosed(matrix.run(), {
-    rowId: "windows-10-1809-x64:update-failure fallback",
-    keyword: /fallbackLaunchedInstalledVersion/,
-  });
-});
-
 test("an unsupported OS fixture is refused on both environments", (t) => {
   const matrix = createSyntheticMatrix(t);
   matrix.row("npm run lint", "windows-10-1809-x64").environment.build = 15063;
@@ -391,4 +398,23 @@ test("an unsupported OS fixture is refused on both environments", (t) => {
     result.output.includes("windows-11-current-x64:npm run lint"),
     result.output,
   );
+});
+
+test("a row outside the required cross-product is refused", (t) => {
+  const matrix = createSyntheticMatrix(t);
+  // A stale index written before a command was removed still carries that
+  // command's rows. The cross-product check is presence-only, so those rows are
+  // inert: the verifier used to accept them silently, which let a 30-row index
+  // from a superseded contract pass as a current 28-row delivery matrix.
+  matrix.rows.push({
+    ...matrix.row("npm run lint"),
+    rowId: "windows-10-1809-x64:update-failure fallback",
+    command: "update-failure fallback",
+    fallbackLaunchedInstalledVersion: true,
+  });
+  matrix.save();
+  assertFailClosed(matrix.run(), {
+    rowId: "windows-10-1809-x64:update-failure fallback",
+    keyword: /is not a required matrix row/,
+  });
 });

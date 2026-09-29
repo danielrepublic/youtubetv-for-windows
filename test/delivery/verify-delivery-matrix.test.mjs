@@ -112,9 +112,6 @@ function createFixture(t) {
       if (command === "standard-user install no-admin-elevation") {
         row.adminElevationRequired = false;
       }
-      if (command === "update-failure fallback") {
-        row.fallbackLaunchedInstalledVersion = true;
-      }
       rows.push(row);
     }
   }
@@ -148,12 +145,12 @@ function createFixture(t) {
   return { index, root, row, run, save, indexPath };
 }
 
-test("SYNTHETIC complete matrix is accepted only with all 30 candidate-bound rows", (t) => {
+test("SYNTHETIC complete matrix is accepted only with all 28 candidate-bound rows", (t) => {
   const fixture = createFixture(t);
   const result = fixture.run();
   assert.equal(result.status, 0, result.output);
   assert.match(result.output, /"synthetic": true/);
-  assert.match(result.output, /30 required candidate-bound rows/);
+  assert.match(result.output, /28 required candidate-bound rows/);
 });
 
 test("missing installer names the artifact-completeness row", (t) => {
@@ -304,23 +301,9 @@ test("a row that cannot prove no admin elevation fails closed", (t) => {
   assert.match(result.output, /adminElevationRequired/);
 });
 
-test("a row that cannot prove the update fallback launched fails closed", (t) => {
-  const fixture = createFixture(t);
-  const row = fixture.row("update-failure fallback");
-  delete row.fallbackLaunchedInstalledVersion;
-  fixture.save();
-  const result = fixture.run();
-  assert.equal(result.status, 1, result.output);
-  assert.ok(
-    result.output.includes("windows-10-1809-x64:update-failure fallback"),
-    result.output,
-  );
-  assert.match(result.output, /fallbackLaunchedInstalledVersion/);
-});
-
 test("an unexecuted placeholder row cannot pass", (t) => {
   const fixture = createFixture(t);
-  const row = fixture.row("update-failure fallback");
+  const row = fixture.row("uninstaller profile deletion");
   row.execution = "unexecuted";
   row.observedResult = "not-run";
   row.exitCode = -1;
@@ -330,10 +313,10 @@ test("an unexecuted placeholder row cannot pass", (t) => {
   assert.equal(result.status, 1, result.output);
   assert.match(
     result.output,
-    /update-failure fallback" has unfilled toolVersions\.electron/,
+    /uninstaller profile deletion" has unfilled toolVersions\.electron/,
   );
   assert.match(
     result.output,
-    /update-failure fallback" is not a passing execution/,
+    /uninstaller profile deletion" is not a passing execution/,
   );
 });

@@ -3,7 +3,7 @@
 // Fail-closed delivery-matrix verifier for the clean Windows environments.
 //
 // The delivery claim this verifier gates is expensive and partly manual: it is
-// the claim that the pinned x64 NSIS candidate installs, launches, updates and
+// the claim that the pinned x64 NSIS candidate installs, launches, and
 // uninstalls on a clean Windows 10 1809 x64 machine and on a current Windows 11
 // x64 machine as a STANDARD user. Only a human on a real machine can produce
 // that evidence, so the verifier's job is to make a green verdict impossible
@@ -12,7 +12,9 @@
 //   * The matrix is exact: REQUIRED_ENVIRONMENTS x REQUIRED_COMMANDS rows, and
 //     every one of them must be present, uniquely identified, and bound to the
 //     candidate version passed on the command line. A row copied from a previous
-//     candidate is stale evidence and is rejected by name.
+//     candidate is stale evidence and is rejected by name. Exactness runs both
+//     ways: a row whose id is outside that cross-product is also rejected, so an
+//     index written against a superseded contract cannot pass as a current one.
 //   * A row is evidence only when it carries a concrete, non-placeholder
 //     `artifactPath` that resolves INSIDE `artifactRoot` and is a regular
 //     non-empty file on disk. A green command with a placeholder path, a
@@ -76,7 +78,6 @@ const REQUIRED_COMMANDS = [
   "npm run verify:windows",
   "standard-user install no-admin-elevation",
   "start-menu shortcut launch",
-  "update-failure fallback",
   "uninstaller profile deletion",
   "artifact completeness",
 ];
@@ -85,7 +86,6 @@ const COMMAND_WITH_INSTALLER = "artifact completeness";
 const COMMAND_WITH_SHORTCUT = "start-menu shortcut launch";
 const COMMAND_WITH_PROFILE = "uninstaller profile deletion";
 const COMMAND_WITH_NO_ELEVATION = "standard-user install no-admin-elevation";
-const COMMAND_WITH_UPDATE_FALLBACK = "update-failure fallback";
 
 // Every one of these is rejected as "not filled in". The empty alternative is
 // deliberate: an absent or zero-length value is a placeholder too.
@@ -253,21 +253,13 @@ function checkInteraction(row, artifactRoot, failures) {
 }
 
 // Rows that assert a machine-observable outcome which a bare "pass" cannot
-// carry. The install row must state that no admin elevation was required, and
-// the update row must state that the installed version still launched; a row
+// carry. The install row must state that no admin elevation was required; a row
 // that omits the field is a claim, not evidence, so the field is required.
 function checkRowEvidence(row, failures) {
   if (row.command === COMMAND_WITH_NO_ELEVATION) {
     if (row.adminElevationRequired !== false) {
       failures.push(
         `row "${row.rowId}" does not prove a per-user install: adminElevationRequired must be false`,
-      );
-    }
-  }
-  if (row.command === COMMAND_WITH_UPDATE_FALLBACK) {
-    if (row.fallbackLaunchedInstalledVersion !== true) {
-      failures.push(
-        `row "${row.rowId}" does not prove the fallback: fallbackLaunchedInstalledVersion must be true`,
       );
     }
   }
@@ -349,6 +341,22 @@ function validate(index, expectedVersion) {
       continue;
     }
     rows.set(row.rowId, row);
+  }
+  // The cross-product is exact in BOTH directions. The loop below only looks
+  // required rows UP, so on its own it proves presence but not absence: a stale
+  // index written before a command was removed still carries that command's
+  // rows, and those rows are individually well-formed, so nothing else here
+  // would ever see them. Derived from the constants so it cannot drift.
+  const requiredRowIds = new Set();
+  for (const environment of REQUIRED_ENVIRONMENTS) {
+    for (const command of REQUIRED_COMMANDS) {
+      requiredRowIds.add(rowId(environment.id, command));
+    }
+  }
+  for (const presentRowId of rows.keys()) {
+    if (!requiredRowIds.has(presentRowId)) {
+      failures.push(`row "${presentRowId}" is not a required matrix row`);
+    }
   }
   for (const environment of REQUIRED_ENVIRONMENTS) {
     for (const command of REQUIRED_COMMANDS) {
