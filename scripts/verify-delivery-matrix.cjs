@@ -5,9 +5,10 @@
 // The delivery claim this verifier gates is expensive and partly manual: it is
 // the claim that the pinned x64 NSIS candidate installs, launches, and
 // uninstalls on a clean Windows 10 1809 x64 machine and on a current Windows 11
-// x64 machine as a STANDARD user. Only a human on a real machine can produce
-// that evidence, so the verifier's job is to make a green verdict impossible
-// without it. Everything here fails closed:
+// x64 machine as a MACHINE-WIDE install, so each install had to be approved at
+// a UAC prompt. Only a human on a real machine can produce that evidence, so the
+// verifier's job is to make a green verdict impossible without it. Everything
+// here fails closed:
 //
 //   * The matrix is exact: REQUIRED_ENVIRONMENTS x REQUIRED_COMMANDS rows, and
 //     every one of them must be present, uniquely identified, and bound to the
@@ -39,14 +40,17 @@
 //     `synthetic: false` is a claim of real evidence that nobody made. The PASS
 //     record echoes it and the PASS line says so out loud.
 //   * The clean-environment rows assert their own observable proof, not a
-//     checkbox: the shortcut row must name a shortcut file that exists, the
-//     uninstaller row must name the exact profile path that is ABSENT after
-//     uninstall, and the artifact-completeness row must name an installer and
-//     an application executable that both exist and whose PE header is read
-//     (DOS e_lfanew at 0x3C -> `PE\0\0` -> Machine u16 at signature+4 must be
-//     0x8664 AMD64 -> OptionalHeader.Magic u16 at signature+24 must be 0x20b
-//     PE32+), reusing the `scripts/verify-artifacts.cjs` approach rather than
-//     trusting a file name.
+//     checkbox: the install row must state that the per-machine install
+//     required elevation, the shortcut row must name the machine-wide
+//     Start-menu shortcut file that exists (the row is account-agnostic: the
+//     per-machine install publishes one shortcut for every account, not one per
+//     installing account), the uninstaller row must name the %PROGRAMDATA%
+//     machine data root that is ABSENT after uninstall, and the
+//     artifact-completeness row must name an installer and an application
+//     executable that both exist and whose PE header is read (DOS e_lfanew at
+//     0x3C -> `PE\0\0` -> Machine u16 at signature+4 must be 0x8664 AMD64 ->
+//     OptionalHeader.Magic u16 at signature+24 must be 0x20b PE32+), reusing the
+//     `scripts/verify-artifacts.cjs` approach rather than trusting a file name.
 //   * Diagnostics always name the failing row id; there is no generic error
 //     path once an index has been parsed.
 
@@ -76,7 +80,7 @@ const REQUIRED_COMMANDS = [
   "npm run verify:artifacts",
   "npm run verify:static",
   "npm run verify:windows",
-  "standard-user install no-admin-elevation",
+  "machine-wide install with-uac-elevation",
   "start-menu shortcut launch",
   "uninstaller profile deletion",
   "artifact completeness",
@@ -85,7 +89,20 @@ const REQUIRED_COMMANDS = [
 const COMMAND_WITH_INSTALLER = "artifact completeness";
 const COMMAND_WITH_SHORTCUT = "start-menu shortcut launch";
 const COMMAND_WITH_PROFILE = "uninstaller profile deletion";
-const COMMAND_WITH_NO_ELEVATION = "standard-user install no-admin-elevation";
+const COMMAND_WITH_ELEVATION = "machine-wide install with-uac-elevation";
+
+// The uninstaller removes exactly ONE machine-wide tree, so the uninstaller row
+// must name that tree's root and not a directory inside it. The row's path is
+// resolved against artifactRoot like every other row's artifact (an absolute
+// machine path is refused by the same rule that forbids citing a file outside
+// the evidence tree), so a row mirrors the machine layout as
+// `ProgramData/youtubetv-for-windows` - the same shape as
+// %PROGRAMDATA%\youtubetv-for-windows. The two segments are compared
+// case-insensitively, and a per-user %APPDATA% / %LOCALAPPDATA% segment is
+// rejected by name because the uninstaller never touches a per-user tree, so
+// naming one would read as deletion evidence for a path nothing removed.
+const MACHINE_DATA_ROOT_SEGMENTS = ["ProgramData", "youtubetv-for-windows"];
+const PER_USER_DATA_ROOT_SEGMENTS = new Set(["appdata", "localappdata"]);
 
 // Every one of these is rejected as "not filled in". The empty alternative is
 // deliberate: an absent or zero-length value is a placeholder too.
@@ -225,6 +242,35 @@ function checkArtifactCompleteness(row, artifactRoot, failures) {
   }
 }
 
+// The uninstaller row may only claim deletion of the machine-wide ProgramData
+// root, because that is the single tree the uninstaller removes. A path that
+// ends in anything else - a per-user %LOCALAPPDATA% profile, or a leaf inside
+// the machine tree - names a path the uninstaller never deletes in that shape,
+// so it is rejected instead of being read as deletion evidence.
+function checkMachineDataRoot(row, failures) {
+  const segments = String(row.profilePath)
+    .split(/[\\/]+/)
+    .filter((segment) => segment !== "" && segment !== ".");
+  const namesMachineRoot = MACHINE_DATA_ROOT_SEGMENTS.every(
+    (segment, index) =>
+      segments.at(-MACHINE_DATA_ROOT_SEGMENTS.length + index)?.toLowerCase() ===
+      segment.toLowerCase(),
+  );
+  if (namesMachineRoot) {
+    return;
+  }
+  const namesPerUserTree = segments.some((segment) =>
+    PER_USER_DATA_ROOT_SEGMENTS.has(segment.toLowerCase()),
+  );
+  failures.push(
+    `row "${row.rowId}" names the wrong data tree in profilePath "${row.profilePath}"` +
+      (namesPerUserTree
+        ? " (a per-user %LOCALAPPDATA% / %APPDATA% tree is not what the uninstaller removes)"
+        : "") +
+      `: it must name the machine-wide data root %PROGRAMDATA%\\${MACHINE_DATA_ROOT_SEGMENTS[1]}`,
+  );
+}
+
 // The clean-environment rows each assert an observable end state. The profile
 // row is the one that can be satisfied by a bare boolean, so it insists on a
 // concrete path that is provably absent: "profileAbsentAfterUninstall: true"
@@ -239,10 +285,13 @@ function checkInteraction(row, artifactRoot, failures) {
       failures.push(
         `row "${row.rowId}" has no usable profilePath "${row.profilePath}" (it must be a concrete path relative to artifactRoot)`,
       );
-    } else if (fs.existsSync(profile)) {
-      failures.push(
-        `row "${row.rowId}" has stale profile "${row.profilePath}" (the profile must be gone after uninstall)`,
-      );
+    } else {
+      checkMachineDataRoot(row, failures);
+      if (fs.existsSync(profile)) {
+        failures.push(
+          `row "${row.rowId}" has stale profile "${row.profilePath}" (the profile must be gone after uninstall)`,
+        );
+      }
     }
     if (row.profileAbsentAfterUninstall !== true) {
       failures.push(
@@ -253,13 +302,15 @@ function checkInteraction(row, artifactRoot, failures) {
 }
 
 // Rows that assert a machine-observable outcome which a bare "pass" cannot
-// carry. The install row must state that no admin elevation was required; a row
-// that omits the field is a claim, not evidence, so the field is required.
+// carry. The install row must state that the machine-wide install required
+// elevation - it is installed into Program Files, so the UAC prompt is the
+// observable fact - and a row that omits the field is a claim, not evidence,
+// so the field is required.
 function checkRowEvidence(row, failures) {
-  if (row.command === COMMAND_WITH_NO_ELEVATION) {
-    if (row.adminElevationRequired !== false) {
+  if (row.command === COMMAND_WITH_ELEVATION) {
+    if (row.adminElevationRequired !== true) {
       failures.push(
-        `row "${row.rowId}" does not prove a per-user install: adminElevationRequired must be false`,
+        `row "${row.rowId}" does not prove a per-machine install: adminElevationRequired must be true, because the machine-wide install must have shown a UAC prompt`,
       );
     }
   }

@@ -106,11 +106,13 @@ function createFixture(t) {
         row.shortcutPath = `shortcuts/${environment.id}.lnk`;
       }
       if (command === "uninstaller profile deletion") {
-        row.profilePath = `profiles/${environment.id}`;
+        // The machine data tree is machine-wide, so both environment rows cite
+        // the SAME ProgramData root; there is no per-environment tree to name.
+        row.profilePath = "ProgramData/youtubetv-for-windows";
         row.profileAbsentAfterUninstall = true;
       }
-      if (command === "standard-user install no-admin-elevation") {
-        row.adminElevationRequired = false;
+      if (command === "machine-wide install with-uac-elevation") {
+        row.adminElevationRequired = true;
       }
       rows.push(row);
     }
@@ -284,21 +286,22 @@ test("a stale candidate row and missing command artifact fail closed", (t) => {
   assert.match(result.output, /artifact/i);
 });
 
-test("a row that cannot prove no admin elevation fails closed", (t) => {
+test("an install row that cannot prove the UAC prompt fails closed", (t) => {
   const fixture = createFixture(t);
   fixture.row(
-    "standard-user install no-admin-elevation",
-  ).adminElevationRequired = true;
+    "machine-wide install with-uac-elevation",
+  ).adminElevationRequired = false;
   fixture.save();
   const result = fixture.run();
   assert.equal(result.status, 1, result.output);
   assert.ok(
     result.output.includes(
-      "windows-10-1809-x64:standard-user install no-admin-elevation",
+      "windows-10-1809-x64:machine-wide install with-uac-elevation",
     ),
     result.output,
   );
   assert.match(result.output, /adminElevationRequired/);
+  assert.match(result.output, /UAC prompt/);
 });
 
 test("an unexecuted placeholder row cannot pass", (t) => {

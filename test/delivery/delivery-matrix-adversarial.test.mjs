@@ -3,7 +3,7 @@
 // This file is a COMPLEMENT to `verify-delivery-matrix.test.mjs`, not a
 // replacement: it pins the defect classes that the fail-closed hardening pass
 // closed, so a future refactor cannot silently reopen them. It exists because
-// five predicates were once absent or satisfiable by a bare boolean:
+// six predicates were once absent or satisfiable by a bare boolean:
 //
 //   1. `synthetic` was never validated, so an index that omitted it produced a
 //      pass record reading `"synthetic": false` - a machine-evidence claim
@@ -14,6 +14,9 @@
 //   4. `fs.existsSync` is also true for a directory, so a directory named as
 //      the installer passed as "the installer exists".
 //   5. A zero-byte file passed as an artifact.
+//   6. The uninstaller row accepted a `profilePath` naming ANY absent tree, so
+//      a per-user %LOCALAPPDATA% path - a tree the uninstaller never removes -
+//      read as evidence that the machine data root was deleted.
 //
 // Assertions deliberately key on the FAILING ROW ID plus a broad class keyword,
 // never on incidental wording, so the suite stays honest when diagnostics are
@@ -113,8 +116,8 @@ function createSyntheticMatrix(t) {
         exitCode: 0,
         artifactPath: writeFile(`logs/${stem}.txt`, `SYNTHETIC ${command}\n`),
       };
-      if (command === "standard-user install no-admin-elevation") {
-        row.adminElevationRequired = false;
+      if (command === "machine-wide install with-uac-elevation") {
+        row.adminElevationRequired = true;
       }
       if (command === "start-menu shortcut launch") {
         row.shortcutPath = writeFile(
@@ -123,7 +126,9 @@ function createSyntheticMatrix(t) {
         );
       }
       if (command === "uninstaller profile deletion") {
-        row.profilePath = `profiles/${environment.id}`;
+        // The machine data tree is machine-wide, so both environment rows cite
+        // the SAME ProgramData root; there is no per-environment tree to name.
+        row.profilePath = "ProgramData/youtubetv-for-windows";
         row.profileAbsentAfterUninstall = true;
       }
       if (command === "artifact completeness") {
@@ -374,12 +379,47 @@ test("the real, currently-unexecuted delivery state is refused wholesale", (t) =
 
 test("an install row that cannot state elevation behaviour is refused", (t) => {
   const matrix = createSyntheticMatrix(t);
-  delete matrix.row("standard-user install no-admin-elevation")
+  delete matrix.row("machine-wide install with-uac-elevation")
     .adminElevationRequired;
   matrix.save();
   assertFailClosed(matrix.run(), {
-    rowId: "windows-10-1809-x64:standard-user install no-admin-elevation",
+    rowId: "windows-10-1809-x64:machine-wide install with-uac-elevation",
     keyword: /adminElevationRequired/,
+  });
+});
+
+// The uninstaller removes one machine-wide tree, so a row that names a per-user
+// %LOCALAPPDATA% tree claims deletion of a path nothing in the uninstaller
+// touches. Accepting it would let a stale per-user row - the shape this matrix
+// had before the machine-wide install - read as current delivery evidence.
+test("a per-user %LOCALAPPDATA% profile path is refused", (t) => {
+  const matrix = createSyntheticMatrix(t);
+  matrix.row("uninstaller profile deletion").profilePath =
+    "LocalAppData/youtubetv-for-windows/users/user/profile";
+  matrix.save();
+  const result = matrix.run();
+  assertFailClosed(result, {
+    rowId: "windows-10-1809-x64:uninstaller profile deletion",
+    keyword: /wrong data tree/,
+  });
+  assert.match(
+    result.output,
+    /%LOCALAPPDATA%/,
+    "the diagnostic must say which wrong tree was named",
+  );
+});
+
+// The machine root is the only shape the uninstaller deletes, so a LEAF inside
+// it (`...\users\<key>\profile`) is refused too: the row is a claim about the
+// whole tree, and a row about one user's leaf says nothing about the root.
+test("a leaf inside the machine data root is refused", (t) => {
+  const matrix = createSyntheticMatrix(t);
+  matrix.row("uninstaller profile deletion").profilePath =
+    "ProgramData/youtubetv-for-windows/users/user/profile";
+  matrix.save();
+  assertFailClosed(matrix.run(), {
+    rowId: "windows-10-1809-x64:uninstaller profile deletion",
+    keyword: /wrong data tree/,
   });
 });
 

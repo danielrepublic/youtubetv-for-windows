@@ -91,7 +91,7 @@
         "command": {
           "type": "string",
           "minLength": 1,
-          "description": "For the ten automated rows this is the exact npm script invocation. The four clean-environment rows are named observation scenarios instead of shell commands: 'standard-user install no-admin-elevation', 'start-menu shortcut launch', 'uninstaller profile deletion', 'artifact completeness'."
+          "description": "For the ten automated rows this is the exact npm script invocation. The four clean-environment rows are named observation scenarios instead of shell commands: 'machine-wide install with-uac-elevation', 'start-menu shortcut launch', 'uninstaller profile deletion', 'artifact completeness'."
         },
         "toolVersions": {
           "type": "object",
@@ -141,20 +141,20 @@
         "shortcutPath": {
           "type": "string",
           "minLength": 1,
-          "description": "Required on the 'start-menu shortcut launch' row. Relative to artifactRoot; must be an existing non-empty regular file (the shortcut the installer created, copied back as evidence)."
+          "description": "Required on the 'start-menu shortcut launch' row. Relative to artifactRoot; must be an existing non-empty regular file: the Start-menu shortcut the per-machine install created, which is the machine-wide shortcut any account on the machine can launch rather than one bound to the account that ran the installer. It is copied back into the evidence tree because the verifier cannot reach the live Start menu on an arbitrary machine."
         },
         "profilePath": {
           "type": "string",
           "minLength": 1,
-          "description": "Required on the 'uninstaller profile deletion' row. Relative to artifactRoot; must name the exact profile path that the uninstaller was supposed to remove, and that path must NOT exist at capture time. A missing or placeholder value fails: a bare boolean is not evidence of deletion."
+          "description": "Required on the 'uninstaller profile deletion' row. Must name the machine-wide data tree root the uninstaller removes, %PROGRAMDATA%\\youtubetv-for-windows, mirrored relative to artifactRoot as 'ProgramData/youtubetv-for-windows' (an absolute machine path is refused like any other absolute path, because the verifier has to resolve the path itself to prove it is gone). A per-user %LOCALAPPDATA% / %APPDATA% path, or a leaf inside the machine tree, names a path the uninstaller never deletes in that shape and is rejected; the named path must NOT exist at capture time. A missing or placeholder value fails: a bare boolean is not evidence of deletion."
         },
         "profileAbsentAfterUninstall": {
           "const": true,
-          "description": "Required on the 'uninstaller profile deletion' row. Must be exactly true, and it is only meaningful alongside a concrete profilePath that the verifier confirms is absent."
+          "description": "Required on the 'uninstaller profile deletion' row. Must be exactly true, and it is only meaningful alongside a concrete profilePath that names the machine data root and that the verifier confirms is absent."
         },
         "adminElevationRequired": {
-          "const": false,
-          "description": "Required on the 'standard-user install no-admin-elevation' row. Must be exactly false; a missing value fails, because a per-user install that needed elevation is not the claimed delivery."
+          "const": true,
+          "description": "Required on the 'machine-wide install with-uac-elevation' row. Must be exactly true; a missing value fails, and so does false, because the machine-wide install must have shown a UAC prompt and an install that needed no elevation is not the claimed delivery."
         }
       },
       "allOf": [
@@ -243,7 +243,7 @@
           "if": {
             "required": ["command"],
             "properties": {
-              "command": { "const": "standard-user install no-admin-elevation" }
+              "command": { "const": "machine-wide install with-uac-elevation" }
             }
           },
           "then": {
