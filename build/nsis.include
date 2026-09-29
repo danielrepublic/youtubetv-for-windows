@@ -424,12 +424,13 @@
 ; `installUtil.nsh:uninstallOldVersion` always executes the previous
 ; uninstaller as `<uninstaller> /S /KEEP_APP_DATA ... --updated`. The macro
 ; below parses the uninstaller's own command line for `/KEEP_APP_DATA` and
-; returns without touching anything when it is present, so the persistent
-; sign-in profile (and the sibling update-status markers) SURVIVE updates.
-; A real user-invoked uninstall (Control Panel, Start menu, Uninstall.exe,
-; QuietUninstallString) never carries that flag, so only that path removes
-; the data tree. Failing open here keeps credentials; it never destroys
-; them.
+; returns without touching anything when it is present, so that upgrade path
+; alone preserves the data tree and the persistent sign-in profile. There is
+; no update-status marker: nothing of that kind is written, read, or kept
+; here. A real user-invoked uninstall (Control Panel, Start menu,
+; Uninstall.exe, QuietUninstallString) never carries that flag, so only that
+; path removes the data tree. Failing open here keeps credentials; it never
+; destroys them.
 ;
 ; REMOVED TREE (fixed convention):
 ;   <machine base>\${YTVW_MACHINE_DIR_NAME}

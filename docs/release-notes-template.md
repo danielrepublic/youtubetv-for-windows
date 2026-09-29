@@ -1,6 +1,6 @@
 # 發佈說明範本 / Release notes template
 
-> 給維護者：發佈每個版本時，複製這份範本，填上方括號的欄位，不要刪掉底部的風險聲明。All placeholders in [brackets] must be filled before publishing. There is no guarantee attached to any release, and there is no rollback once a user installs it.
+> 給維護者：發佈每個版本時，複製這份範本，填上方括號的欄位，不要刪掉底部的風險聲明。All placeholders in [brackets] must be filled before publishing. There is no guarantee attached to any release, and deleted user data has no rollback: reinstalling does not restore it.
 
 ---
 

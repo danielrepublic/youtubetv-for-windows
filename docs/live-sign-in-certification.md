@@ -5,8 +5,8 @@ Status: RELEASE-BLOCKED
 - Status vocabulary: `release-blocked` or `passed`. No other value is valid for
   this gate, and it is never inferred from an adjacent test.
 - Gate: an ordinary Google account completes sign-in inside the app-owned child
-  flow, and that session survives a full application relaunch in the shared
-  persistent profile.
+  flow, and that session survives a full application relaunch in the same
+  per-Windows-user persistent profile as the main window.
 - Blocking reason: the execution environment that implemented plan todo 4 has
   no real Google account, no phone for the 2FA challenge, and no permission to
   perform live sign-in against YouTube. Live sign-in is a maintainer-run gate;
