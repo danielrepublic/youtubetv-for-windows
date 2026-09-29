@@ -138,6 +138,11 @@ RequestExecutionLevel user
 !include "FileFunc.nsh"
 
 !define BUILD_UNINSTALLER
+# The per-machine enforcement guards in nsis.include are evaluated in both
+# compiles, so this standalone uninstaller harness carries the same defines
+# electron-builder passes to the real uninstaller build.
+!define INSTALL_MODE_PER_ALL_USERS
+!define MULTIUSER_INSTALLMODE_ALLOW_ELEVATION
 !define YTVW_DATA_ROOT "${directory}"
 !define YTVW_DATA_DIR_NAME "${DATA_DIR_NAME}"
 !define YTVW_ROAMING_DATA_ROOT "${directory}\\roaming-root"

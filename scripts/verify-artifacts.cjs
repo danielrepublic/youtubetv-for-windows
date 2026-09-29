@@ -18,8 +18,9 @@
 //     `builder-debug.yml`, `builder-effective-config.yaml`); anything else
 //     fails closed by name.
 //   * The application executable is `win-unpacked/<productName>.exe`; every
-//     recursive `.exe` under `release-output/` must be either that file or
-//     the top-level installer (an `elevate.exe` helper or any stray binary
+//     recursive `.exe` under `release-output/` must be exactly that file,
+//     the top-level installer, or electron-builder's per-machine elevation
+//     helper at `win-unpacked/resources/elevate.exe` (any other stray binary
 //     fails). The reported architecture/platform are read from the PE header
 //     of the produced application executable (DOS e_lfanew at 0x3C ->
 //     `PE\0\0` -> Machine u16 at signature+4 must be 0x8664 AMD64 ->
@@ -48,6 +49,13 @@ const MANIFEST_PATH = path.join(REPOSITORY_ROOT, "package.json");
 const EXPECTED_PACKAGED_DIRECTORY = "win-unpacked";
 const EXPECTED_APPLICATION_SUFFIX = ".exe";
 const EXPECTED_INSTALLER_ARCH_LABEL = "x64";
+
+// electron-builder copies its elevation helper into the packaged app whenever
+// `nsis.perMachine` is true (even if `nsis.packElevateHelper` is false, see
+// app-builder-lib's CopyElevateHelper), so a per-machine build carries exactly
+// this one extra `.exe` inside the packaged directory.
+const EXPECTED_ELEVATE_HELPER_DIRECTORY = "resources";
+const EXPECTED_ELEVATE_HELPER_NAME = "elevate.exe";
 
 const PE_SIGNATURE = 0x00004550; // "PE\0\0"
 const PE_MACHINE_AMD64 = 0x8664;
@@ -157,7 +165,7 @@ function renderArtifactName(template, manifest) {
 }
 
 // Asserts the packaging configuration that produces exactly one unsigned
-// x64 per-user NSIS installer. Returns a list of failure strings (empty
+// x64 per-machine NSIS installer. Returns a list of failure strings (empty
 // when the contract holds). This is the same predicate the unit suite
 // exercises against mutated manifests, so a weakened config fails both.
 function checkManifestContract(manifest) {
@@ -183,7 +191,7 @@ function checkManifestContract(manifest) {
   }
   if (manifest.build.win?.requestedExecutionLevel !== "asInvoker") {
     failures.push(
-      "build.win.requestedExecutionLevel must be asInvoker (a standard per-user install needs no UAC)",
+      "build.win.requestedExecutionLevel must be asInvoker (the app itself never elevates; the installer and uninstaller do)",
     );
   }
 
@@ -204,9 +212,9 @@ function checkManifestContract(manifest) {
     }
     for (const [option, wanted] of [
       ["oneClick", false],
-      ["perMachine", false],
-      ["allowElevation", false],
-      ["packElevateHelper", false],
+      ["perMachine", true],
+      ["allowElevation", true],
+      ["packElevateHelper", true],
       ["createDesktopShortcut", true],
       ["createStartMenuShortcut", true],
       ["deleteAppDataOnUninstall", false],
@@ -413,9 +421,16 @@ function main() {
     outputDirectory,
     expectedInstallerPath,
   );
+  const expectedElevateHelperPath = path.join(
+    outputDirectory,
+    EXPECTED_PACKAGED_DIRECTORY,
+    EXPECTED_ELEVATE_HELPER_DIRECTORY,
+    EXPECTED_ELEVATE_HELPER_NAME,
+  );
   const allowedExecutables = new Set([
     path.resolve(expectedExecutablePath),
     path.resolve(expectedInstallerPath),
+    path.resolve(expectedElevateHelperPath),
   ]);
   const unexpectedExecutables = executablePaths.filter(
     (filePath) => !allowedExecutables.has(path.resolve(filePath)),
@@ -433,13 +448,15 @@ function main() {
   );
   if (
     !resolvedExecutables.has(path.resolve(expectedExecutablePath)) ||
-    resolvedExecutables.size !== 2
+    !resolvedExecutables.has(path.resolve(expectedElevateHelperPath)) ||
+    resolvedExecutables.size !== 3
   ) {
     const found = executablePaths.map((filePath) =>
       relativeToOutput(outputDirectory, filePath),
     );
     failures.push(
-      `expected exactly one application executable at ${expectedExecutableRelative}; found ` +
+      `expected exactly three executables (the application at ${expectedExecutableRelative}, the installer at ${expectedInstallerRelative}, and the per-machine elevation helper at ` +
+        `${EXPECTED_PACKAGED_DIRECTORY}/${EXPECTED_ELEVATE_HELPER_DIRECTORY}/${EXPECTED_ELEVATE_HELPER_NAME}); found ` +
         `${executablePaths.length}: ${found.length > 0 ? found.join(", ") : "(none)"}`,
     );
     return report(failures);

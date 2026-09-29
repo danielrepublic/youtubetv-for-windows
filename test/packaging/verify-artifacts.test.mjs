@@ -96,6 +96,11 @@ function validTree(root) {
   const unpacked = path.join(output, "win-unpacked");
   fs.mkdirSync(unpacked, { recursive: true });
   fs.copyFileSync(X64_SYSTEM_EXE, path.join(unpacked, applicationName()));
+  // A per-machine build carries electron-builder's elevation helper inside
+  // the packaged directory; the verifier requires it by exact path.
+  const resources = path.join(unpacked, "resources");
+  fs.mkdirSync(resources, { recursive: true });
+  fs.writeFileSync(path.join(resources, "elevate.exe"), "elevate-bytes");
   fs.writeFileSync(path.join(output, installerName()), "installer-bytes");
   fs.writeFileSync(
     path.join(output, `${installerName()}.blockmap`),
@@ -154,6 +159,24 @@ test("an extra executable fails closed by path", (t) => {
   assert.equal(run.status, 1, run.output);
   assert.match(run.output, /unexpected executable/);
   assert.ok(run.output.includes("elevate.exe"), run.output);
+});
+
+test("a missing per-machine elevation helper fails closed", (t) => {
+  const run = runFixture(t, fixtureManifest(), (root) => {
+    validTree(root);
+    fs.rmSync(
+      path.join(
+        root,
+        "release-output",
+        "win-unpacked",
+        "resources",
+        "elevate.exe",
+      ),
+    );
+  });
+  assert.equal(run.status, 1, run.output);
+  assert.match(run.output, /expected exactly three executables/);
+  assert.ok(run.output.includes("resources/elevate.exe"), run.output);
 });
 
 test("a non-x64 output directory fails", (t) => {

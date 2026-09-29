@@ -7,7 +7,7 @@
 // chain, not just the release.
 //
 // Covered:
-//   - exactly one `nsis`/`x64` Windows target, per-user install without UAC,
+//   - exactly one `nsis`/`x64` Windows target, machine-wide install with UAC,
 //     the Start-menu shortcut, committed include wiring, and the versioned
 //     `<product>-<version>-x64.exe` installer convention;
 //   - the uninstaller half removes the exact profile directory named by
@@ -59,7 +59,7 @@ function assertRejected(candidate, pattern) {
   );
 }
 
-test("the manifest produces exactly one unsigned x64 per-user NSIS installer", () => {
+test("the manifest produces exactly one unsigned x64 per-machine NSIS installer", () => {
   assert.deepEqual(checkManifestContract(manifest), []);
 });
 
@@ -109,7 +109,7 @@ test("a non-NSIS or non-x64 target is rejected", () => {
   );
 });
 
-test("per-user and shortcut options cannot be weakened", () => {
+test("per-machine and shortcut options cannot be weakened", () => {
   assertRejected(
     mutated((draft) => {
       draft.build.win.requestedExecutionLevel = "highestAvailable";
@@ -118,9 +118,9 @@ test("per-user and shortcut options cannot be weakened", () => {
   );
   for (const [option, wanted] of [
     ["oneClick", true],
-    ["perMachine", true],
-    ["allowElevation", true],
-    ["packElevateHelper", true],
+    ["perMachine", false],
+    ["allowElevation", false],
+    ["packElevateHelper", false],
     ["deleteAppDataOnUninstall", true],
     ["createStartMenuShortcut", false],
     ["createDesktopShortcut", false],

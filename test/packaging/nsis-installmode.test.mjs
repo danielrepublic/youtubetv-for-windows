@@ -1,30 +1,36 @@
-// Task-7 install-mode enforcement suite.
+// Task-6 install-mode enforcement suite (per-machine).
 //
-// The reviewer blocker: `oneClick:false` + `perMachine:false` alone still
-// leaves the assisted install-mode page and elevation available. The fix is
-// a three-layer enforcement, and every layer is proven here by observable
-// behavior — never by echoing a JSON constant:
+// The application installs machine-wide under `C:\Program Files`. The
+// per-machine contract is enforced at the compile boundary and proven here by
+// observable behavior — never by echoing a JSON constant:
 //
 //   1. Compile-time guards: `build/nsis.include` aborts the makensis BUILD
-//      with `!error` when electron-builder passes a per-machine, elevating,
-//      or one-click define. Each hostile define is compiled against the real
-//      include and must fail with the documented message.
-//   2. Interactive path: the `customInstallMode` hook sets
-//      `$isForceCurrentInstall`, which makes the template's mode page select
-//      per-user and skip itself. Proven at runtime with a marker.
-//   3. Silent/update path (no page is ever shown): the exact downstream
-//      consumer copied from `installer.nsi:99-121` must see the restored
-//      per-user state after `customInit`. Calling `customInit` alone is not
-//      sufficient because that consumer later reads `$hasPerMachineInstallation`.
-//   4. Wiring: the real build's generated script (`builder-debug.yml`,
-//      emitted by electron-builder) must route through the committed
-//      include. Skipped with a remedy before any real package exists.
+//      with `!error` when electron-builder does not pass the per-machine or
+//      elevation define, or when it passes `ONE_CLICK`. The required define
+//      set must compile, and each missing/extra define must fail with the
+//      guard's own documented message.
+//      `ONE_CLICK` is evaluated first because
+//      `MULTIUSER_INSTALLMODE_ALLOW_ELEVATION` is emitted only in the
+//      assisted branch and is therefore mutually exclusive with it: a
+//      `oneClick: true` build must abort with the assisted-installer message,
+//      not the missing-elevation message.
+//   2. Runtime: `customInit` re-asserts the machine-wide mode
+//      (`$installMode == "all"`), and the install root resolves under
+//      `$PROGRAMFILES64`. The hook is compiled exactly as electron-builder
+//      compiles it, against byte copies of the installed `multiUser.nsh`.
+//   3. Silent/parameter path: plain `/S` and `/S /allusers` both land
+//      machine-wide, because in a per-machine build `multiUser.nsh` selects
+//      the machine-wide mode and ignores the per-user parameters.
+//   4. Wiring: the real build's generated script (`builder-debug.yml`, emitted
+//      by electron-builder) must route through the committed include and
+//      request `admin` on the installer branch. Skipped with a remedy before
+//      any real package exists.
 //
 // Template copies: `multiUser.nsh`/`UAC.nsh` are copied at runtime from the
-// installed builder (script-directory resolution would otherwise fall
-// through to NSIS's own `MultiUser.nsh` on this case-insensitive
-// filesystem). The StdUtils compile-time plugin comes from the builder's
-// `!addplugindir`, exactly like the generated script.
+// installed builder (script-directory resolution would otherwise fall through
+// to NSIS's own `MultiUser.nsh` on this case-insensitive filesystem). The
+// StdUtils compile-time plugin comes from the builder's `!addplugindir`,
+// exactly like the generated script.
 
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
@@ -173,161 +179,229 @@ function createCase(t, name) {
   return directory;
 }
 
-const GUARDS = [
-  ["INSTALL_MODE_PER_ALL_USERS", "forbids per-machine installs"],
-  ["MULTIUSER_INSTALLMODE_ALLOW_ELEVATION", "forbids elevation"],
-  ["ONE_CLICK", "requires the assisted installer"],
-];
-
-for (const [hostileDefine, messageFragment] of GUARDS) {
-  test(
-    `a ${hostileDefine} build aborts at compile time`,
-    { skip: skipReason },
-    (t) => {
-      const directory = createCase(t, hostileDefine.toLowerCase());
-      fs.writeFileSync(
-        path.join(directory, "guard.nsi"),
-        [
-          "Unicode true",
-          'Name "ytvw-guard"',
-          'OutFile "guard.exe"',
-          "SilentInstall silent",
-          "RequestExecutionLevel user",
-          '!include "LogicLib.nsh"',
-          '!include "FileFunc.nsh"',
-          `!define ${hostileDefine}`,
-          `!addincludedir "${path.dirname(includePath)}"`,
-          '!include "nsis.include"',
-          "Section",
-          "SectionEnd",
-        ].join("\n"),
-        "utf8",
-      );
-      const compiled = compile(directory, "guard.nsi");
-      assert.notEqual(
-        compiled.status,
-        0,
-        `${hostileDefine} must abort the build, but it compiled`,
-      );
-      assert.ok(
-        compiled.output.includes(messageFragment),
-        `expected the per-user error text, got:\n${compiled.output.slice(-500)}`,
-      );
-    },
-  );
+function guardSource(hostileDefines) {
+  return [
+    "Unicode true",
+    'Name "ytvw-guard"',
+    'OutFile "guard.exe"',
+    "SilentInstall silent",
+    "RequestExecutionLevel user",
+    '!include "LogicLib.nsh"',
+    '!include "FileFunc.nsh"',
+    ...hostileDefines.map((define) => `!define ${define}`),
+    `!addincludedir "${path.dirname(includePath)}"`,
+    '!include "nsis.include"',
+    "Section",
+    "SectionEnd",
+  ].join("\n");
 }
 
 test(
-  "the install-mode hook forces the per-user flag at runtime",
+  "the include compiles with the required per-machine defines",
   { skip: skipReason },
-  async (t) => {
-    const directory = createCase(t, "flag");
+  (t) => {
+    const directory = createCase(t, "baseline");
     fs.writeFileSync(
-      path.join(directory, "flag.nsi"),
-      [
-        "Unicode true",
-        'Name "ytvw-flag"',
-        'OutFile "flag.exe"',
-        "SilentInstall silent",
-        "RequestExecutionLevel user",
-        '!include "LogicLib.nsh"',
-        '!include "FileFunc.nsh"',
-        '!define APP_EXECUTABLE_FILENAME "app.exe"',
-        `!addincludedir "${path.dirname(includePath)}"`,
-        '!include "nsis.include"',
-        "Var isForceCurrentInstall",
-        "Section",
-        'StrCpy $isForceCurrentInstall "0"',
-        "!insertmacro customInstallMode",
-        "!insertmacro customInit",
-        "!insertmacro customInstall",
-        '${If} $isForceCurrentInstall == "1"',
-        `FileOpen $0 "${directory}\\forced.txt" w`,
-        'FileWrite $0 "forced"',
-        "FileClose $0",
-        "${EndIf}",
-        "SectionEnd",
-      ].join("\n"),
+      path.join(directory, "baseline.nsi"),
+      guardSource([
+        "INSTALL_MODE_PER_ALL_USERS",
+        "MULTIUSER_INSTALLMODE_ALLOW_ELEVATION",
+      ]),
       "utf8",
     );
-    const compiled = compile(directory, "flag.nsi");
-    assert.equal(compiled.status, 0, compiled.output.slice(-500));
-    assert.equal(await runSilent(path.join(directory, "flag.exe")), 0);
-    assert.equal(
-      fs.existsSync(path.join(directory, "forced.txt")),
-      true,
-      "customInstallMode must set the per-user force flag",
+    const compiled = compile(directory, "baseline.nsi");
+    assert.equal(compiled.status, 0, compiled.output.slice(-800));
+  },
+);
+
+test(
+  "a build without the per-machine define aborts at compile time",
+  { skip: skipReason },
+  (t) => {
+    const directory = createCase(t, "missing-permachine");
+    fs.writeFileSync(
+      path.join(directory, "guard.nsi"),
+      guardSource(["MULTIUSER_INSTALLMODE_ALLOW_ELEVATION"]),
+      "utf8",
+    );
+    const compiled = compile(directory, "guard.nsi");
+    assert.notEqual(
+      compiled.status,
+      0,
+      "a build without INSTALL_MODE_PER_ALL_USERS must abort",
+    );
+    assert.ok(
+      compiled.output.includes("requires a machine-wide install"),
+      `expected the per-machine error text, got:\n${compiled.output.slice(-500)}`,
     );
   },
 );
 
 test(
-  "the real silent consumer keeps plain /S installs per-user",
+  "a per-machine build without elevation aborts at compile time",
+  { skip: skipReason },
+  (t) => {
+    const directory = createCase(t, "missing-elevation");
+    fs.writeFileSync(
+      path.join(directory, "guard.nsi"),
+      guardSource(["INSTALL_MODE_PER_ALL_USERS"]),
+      "utf8",
+    );
+    const compiled = compile(directory, "guard.nsi");
+    assert.notEqual(
+      compiled.status,
+      0,
+      "a build without MULTIUSER_INSTALLMODE_ALLOW_ELEVATION must abort",
+    );
+    assert.ok(
+      compiled.output.includes("requires elevation support"),
+      `expected the elevation error text, got:\n${compiled.output.slice(-500)}`,
+    );
+  },
+);
+
+test(
+  "a one-click build aborts with the assisted-installer message, not the elevation guard",
+  { skip: skipReason },
+  (t) => {
+    const directory = createCase(t, "one-click");
+    // The exact define set electron-builder emits for `oneClick: true` with
+    // `perMachine: true`: INSTALL_MODE_PER_ALL_USERS is set, elevation is not
+    // (the assisted branch that would set it is skipped). The per-machine
+    // guard is satisfied, so the only way to see the assisted-installer
+    // message is for the ONE_CLICK guard to be evaluated first.
+    fs.writeFileSync(
+      path.join(directory, "guard.nsi"),
+      guardSource(["INSTALL_MODE_PER_ALL_USERS", "ONE_CLICK"]),
+      "utf8",
+    );
+    const compiled = compile(directory, "guard.nsi");
+    assert.notEqual(compiled.status, 0, "a one-click build must abort");
+    assert.ok(
+      compiled.output.includes("requires the assisted installer"),
+      `expected the assisted-installer message, got:\n${compiled.output.slice(-500)}`,
+    );
+    assert.ok(
+      !compiled.output.includes("requires elevation support"),
+      `the wrong guard fired:\n${compiled.output.slice(-500)}`,
+    );
+  },
+);
+
+function copyRuntimeTemplates(directory) {
+  for (const [source, target] of [
+    [path.join(templateDirectory, "multiUser.nsh"), "ytvw-multiUser.nsh"],
+    [path.join(templateIncludeDirectory, "UAC.nsh"), "UAC.nsh"],
+  ]) {
+    assert.equal(
+      fs.existsSync(source),
+      true,
+      `the installed builder template must exist: ${source}`,
+    );
+    fs.copyFileSync(source, path.join(directory, target));
+  }
+}
+
+// The preamble mirrors the define set of a real per-machine assisted build:
+// INSTALL_MODE_PER_ALL_USERS (so multiUser.nsh declares
+// `setInstallModePerAllUsers` and withholds the per-user Vars) plus APP_64
+// (so the machine root is `$PROGRAMFILES64`).
+function runtimeSource(directory, executableName, sectionLines) {
+  return [
+    "Unicode true",
+    `Name "${executableName}"`,
+    `OutFile "${executableName}.exe"`,
+    "SilentInstall silent",
+    "RequestExecutionLevel user",
+    '!include "LogicLib.nsh"',
+    '!include "FileFunc.nsh"',
+    '!include "x64.nsh"',
+    `!addplugindir /x86-unicode "${pluginsDirectory}"`,
+    `!addincludedir "${templateIncludeDirectory}"`,
+    '!include "StdUtils.nsh"',
+    "!define INSTALL_MODE_PER_ALL_USERS",
+    "!define INSTALL_MODE_PER_ALL_USERS_REQUIRED",
+    "!define MULTIUSER_INSTALLMODE_ALLOW_ELEVATION",
+    "!define APP_64",
+    '!include "ytvw-multiUser.nsh"',
+    '!define APP_GUID "00000000-0000-0000-0000-000000000000"',
+    '!define UNINSTALL_APP_KEY "ytvw-probe"',
+    '!define APP_FILENAME "ytvw-probe"',
+    '!define APP_EXECUTABLE_FILENAME "app.exe"',
+    `!addincludedir "${path.dirname(includePath)}"`,
+    '!include "nsis.include"',
+    "Section",
+    ...sectionLines,
+    "SectionEnd",
+    "",
+  ].join("\n");
+}
+
+function recordModeLines(directory) {
+  return [
+    `FileOpen $0 "${directory}\\mode.txt" w`,
+    "FileWrite $0 $installMode",
+    "FileClose $0",
+    `FileOpen $0 "${directory}\\instdir.txt" w`,
+    "FileWrite $0 $INSTDIR",
+    "FileClose $0",
+  ];
+}
+
+function assertMachineWide(directory) {
+  assert.equal(
+    fs.readFileSync(path.join(directory, "mode.txt"), "utf8"),
+    "all",
+    "the install mode must be machine-wide (all)",
+  );
+  const instDir = fs.readFileSync(path.join(directory, "instdir.txt"), "utf8");
+  const programFiles = process.env.ProgramFiles ?? "";
+  assert.ok(
+    programFiles.length > 0 &&
+      instDir.toLowerCase().startsWith(programFiles.toLowerCase()),
+    `the install root must resolve under $PROGRAMFILES64; got ${JSON.stringify(instDir)}`,
+  );
+}
+
+test(
+  "customInit re-asserts the machine-wide mode at runtime",
+  { skip: skipReason },
+  async (t) => {
+    const directory = createCase(t, "runtime");
+    copyRuntimeTemplates(directory);
+    fs.writeFileSync(
+      path.join(directory, "runtime.nsi"),
+      runtimeSource(directory, "runtime", [
+        'StrCpy $installMode "unset"',
+        "!insertmacro customInit",
+        ...recordModeLines(directory),
+      ]),
+      "utf8",
+    );
+    const compiled = compile(directory, "runtime.nsi");
+    assert.equal(compiled.status, 0, compiled.output.slice(-800));
+    assert.equal(await runSilent(path.join(directory, "runtime.exe")), 0);
+    assertMachineWide(directory);
+  },
+);
+
+test(
+  "the real silent consumer installs machine-wide on plain /S",
   { skip: skipReason },
   async (t) => {
     const directory = createCase(t, "silent-default");
-    // Byte copies of the installed builder templates. The script directory
-    // wins NSIS include resolution; without the rename the lookup falls
-    // through to NSIS's own MultiUser.nsh on this case-insensitive
-    // filesystem.
-    for (const [source, target] of [
-      [path.join(templateDirectory, "multiUser.nsh"), "ytvw-multiUser.nsh"],
-      [path.join(templateIncludeDirectory, "UAC.nsh"), "UAC.nsh"],
-    ]) {
-      assert.equal(
-        fs.existsSync(source),
-        true,
-        `the installed builder template must exist: ${source}`,
-      );
-      fs.copyFileSync(source, path.join(directory, target));
-    }
+    copyRuntimeTemplates(directory);
     fs.writeFileSync(
       path.join(directory, "mode.nsi"),
-      [
-        "Unicode true",
-        'Name "ytvw-mode"',
-        'OutFile "silent-default.exe"',
-        "SilentInstall silent",
-        "RequestExecutionLevel user",
-        '!include "LogicLib.nsh"',
-        '!include "FileFunc.nsh"',
-        `!addplugindir /x86-unicode "${pluginsDirectory}"`,
-        `!addincludedir "${templateIncludeDirectory}"`,
-        '!include "StdUtils.nsh"',
-        "!define INSTALL_MODE_PER_ALL_USERS_REQUIRED",
-        '!include "ytvw-multiUser.nsh"',
-        '!define APP_GUID "00000000-0000-0000-0000-000000000000"',
-        '!define UNINSTALL_APP_KEY "ytvw-probe"',
-        '!define APP_FILENAME "ytvw-probe"',
-        '!define APP_EXECUTABLE_FILENAME "app.exe"',
-        `!addincludedir "${path.dirname(includePath)}"`,
-        '!include "nsis.include"',
-        "Section",
-        'StrCpy $hasPerMachineInstallation "0"',
-        'StrCpy $hasPerUserInstallation "1"',
-        'StrCpy $installMode "CurrentUser"',
-        "!insertmacro customInit",
-        "!insertmacro customInstall",
-        // This is the exact silent consumer from installer.nsi:99-121.
-        '${if} $hasPerMachineInstallation == "1"',
-        "${andIf} ${Silent}",
-        "${ifNot} ${UAC_IsAdmin}",
-        "SetErrorLevel 91",
-        "Quit",
-        "${else}",
+      runtimeSource(directory, "silent-default", [
+        'StrCpy $installMode "unset"',
+        // assistedInstaller.nsh's `initMultiUser` is exactly this call under
+        // INSTALL_MODE_PER_ALL_USERS; that template file is not available to a
+        // standalone harness, so the call it makes is inlined here.
         "!insertmacro setInstallModePerAllUsers",
-        "${endIf}",
-        "${endIf}",
-        '${If} $installMode == "CurrentUser"',
-        `FileOpen $0 "${directory}\\peruser.txt" w`,
-        'FileWrite $0 "peruser"',
-        "FileClose $0",
-        "${EndIf}",
-        `FileOpen $0 "${directory}\\mode-was.txt" w`,
-        "FileWrite $0 $installMode",
-        "FileClose $0",
-        "SectionEnd",
-      ].join("\n"),
+        "!insertmacro customInit",
+        ...recordModeLines(directory),
+      ]),
       "utf8",
     );
     const compiled = compile(directory, "mode.nsi");
@@ -336,83 +410,26 @@ test(
       await runSilent(path.join(directory, "silent-default.exe")),
       0,
     );
-    assert.equal(
-      fs.existsSync(path.join(directory, "mode-was.txt")),
-      true,
-      "the harness must record the resulting mode",
-    );
-    assert.equal(
-      fs.readFileSync(path.join(directory, "mode-was.txt"), "utf8"),
-      "CurrentUser",
-      "the downstream consumer must preserve the default per-user mode",
-    );
-    assert.equal(
-      fs.existsSync(path.join(directory, "peruser.txt")),
-      true,
-      "the default per-user mode must be observable",
-    );
+    assertMachineWide(directory);
   },
 );
 
 test(
-  "the real silent /allusers consumer keeps the install per-user",
+  "the real silent /allusers consumer installs machine-wide",
   { skip: skipReason },
   async (t) => {
     const directory = createCase(t, "silent-allusers");
-    for (const [source, target] of [
-      [path.join(templateDirectory, "multiUser.nsh"), "ytvw-multiUser.nsh"],
-      [path.join(templateIncludeDirectory, "UAC.nsh"), "UAC.nsh"],
-    ]) {
-      assert.equal(
-        fs.existsSync(source),
-        true,
-        `the installed builder template must exist: ${source}`,
-      );
-      fs.copyFileSync(source, path.join(directory, target));
-    }
+    copyRuntimeTemplates(directory);
     fs.writeFileSync(
       path.join(directory, "mode.nsi"),
-      [
-        "Unicode true",
-        'Name "ytvw-mode"',
-        'OutFile "silent-allusers.exe"',
-        "SilentInstall silent",
-        "RequestExecutionLevel user",
-        '!include "LogicLib.nsh"',
-        '!include "FileFunc.nsh"',
-        `!addplugindir /x86-unicode "${pluginsDirectory}"`,
-        `!addincludedir "${templateIncludeDirectory}"`,
-        '!include "StdUtils.nsh"',
-        "!define INSTALL_MODE_PER_ALL_USERS_REQUIRED",
-        '!include "ytvw-multiUser.nsh"',
-        '!define APP_GUID "00000000-0000-0000-0000-000000000000"',
-        '!define UNINSTALL_APP_KEY "ytvw-probe"',
-        '!define APP_FILENAME "ytvw-probe"',
-        '!define APP_EXECUTABLE_FILENAME "app.exe"',
-        `!addincludedir "${path.dirname(includePath)}"`,
-        '!include "nsis.include"',
-        "Section",
-        // The exact state initMultiUser leaves behind after parsing /allusers.
-        'StrCpy $hasPerMachineInstallation "1"',
-        'StrCpy $hasPerUserInstallation "0"',
-        'StrCpy $installMode "all"',
-        "!insertmacro customInit",
-        "!insertmacro customInstall",
-        // This is the exact silent consumer from installer.nsi:99-121.
-        '${if} $hasPerMachineInstallation == "1"',
-        "${andIf} ${Silent}",
-        "${ifNot} ${UAC_IsAdmin}",
-        "SetErrorLevel 91",
-        "Quit",
-        "${else}",
+      runtimeSource(directory, "silent-allusers", [
+        'StrCpy $installMode "unset"',
+        // Same inlined per-machine `initMultiUser` branch as the plain-/S
+        // case: a per-machine build ignores the per-user parameters.
         "!insertmacro setInstallModePerAllUsers",
-        "${endIf}",
-        "${endIf}",
-        `FileOpen $0 "${directory}\\mode-was.txt" w`,
-        "FileWrite $0 $installMode",
-        "FileClose $0",
-        "SectionEnd",
-      ].join("\n"),
+        "!insertmacro customInit",
+        ...recordModeLines(directory),
+      ]),
       "utf8",
     );
     const compiled = compile(directory, "mode.nsi");
@@ -423,13 +440,9 @@ test(
         "/allusers",
       ]),
       0,
-      "the real silent consumer must not take its all-users elevation path",
+      "the /allusers parameter must not fail the machine-wide install",
     );
-    assert.equal(
-      fs.readFileSync(path.join(directory, "mode-was.txt"), "utf8"),
-      "CurrentUser",
-      "the real silent /allusers consumer must retain CurrentUser",
-    );
+    assertMachineWide(directory);
   },
 );
 
@@ -455,5 +468,9 @@ test("the real generated installer routes through the committed include", () => 
   assert.ok(
     generated.includes("!ifmacrodef customInit"),
     "the generated installer must invoke the customInit hook after initMultiUser",
+  );
+  assert.ok(
+    generated.includes("RequestExecutionLevel admin"),
+    "the per-machine installer branch must request admin execution level",
   );
 });

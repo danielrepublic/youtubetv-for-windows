@@ -8,16 +8,16 @@
 ; i.e. BEFORE the template body. The template invokes the documented hooks:
 ;
 ;   installer.nsi:79       -> `!ifmacrodef customInit`        (inside .onInit)
-;   multiUserUi.nsh:41     -> `!ifmacrodef customInstallmode` (install-mode page)
 ;   installSection.nsh:81  -> `!ifmacrodef customInstall`     (end of install)
 ;   uninstaller.nsh:156    -> `!ifmacrodef customUnInstall`   (uninstall section)
 ;
 ; `customInit` is deliberately used (NOT `preInit`): installer.nsi runs it
 ; after `initMultiUser` and BEFORE `CHECK_APP_RUNNING` and before
-; `uninstallOldVersion` / `installApplicationFiles`, so the per-user state it
-; restores is already in effect when the first filesystem or registry action
-; runs. `customInstall` is retained as an intentionally empty hook so the
-; template's `!ifmacrodef customInstall` wiring stays stable.
+; `uninstallOldVersion` / `installApplicationFiles`, so the machine-wide
+; install mode it re-asserts is already in effect when the first filesystem
+; or registry action runs. `customInstall` is retained as an intentionally
+; empty hook so the template's `!ifmacrodef customInstall` wiring stays
+; stable.
 ;
 ; REQUIRED INCLUDES AT INSERTION TIME (provided by installer.nsi: MUI2 ->
 ; LogicLib, multiUser.nsh -> FileFunc.nsh; the standalone harnesses include
@@ -39,11 +39,13 @@
 ; STRUCTURE
 ; ---------------------------------------------------------------------------
 ;
-;   guards                    - evaluated in BOTH compiles; a hostile
-;                               per-machine, elevating, or one-click config
-;                               aborts the build with an error;
-;   !ifndef BUILD_UNINSTALLER - the installer hooks (customInstallMode /
-;                               customInit / customInstall);
+;   guards                    - evaluated in BOTH compiles; only a per-machine,
+;                               elevating, assisted config passes, and a
+;                               missing per-machine/elevation define or a
+;                               one-click config aborts the build with an
+;                               error;
+;   !ifndef BUILD_UNINSTALLER - the installer hooks (customInit /
+;                               customInstall);
 ;   !ifdef  BUILD_UNINSTALLER - the profile-removing uninstaller half
 ;                               (customUnInstall).
 ;
@@ -55,37 +57,44 @@
 ; ===========================================================================
 ;
 ; ---------------------------------------------------------------------------
-; PER-USER-ONLY ENFORCEMENT (todo 7)
+; PER-MACHINE ENFORCEMENT (todo 6)
 ; ---------------------------------------------------------------------------
 ;
 ; Evaluated against the REAL defines electron-builder passes to makensis on
-; the command line, in BOTH the installer and the uninstaller compiles. Any
-; one of them being set aborts the BUILD with an error, so a
-; per-machine-capable or elevating configuration can never produce an
-; installer silently:
+; the command line, in BOTH the installer and the uninstaller compiles. A
+; missing per-machine or elevation define, or a one-click configuration,
+; aborts the BUILD with an error, so only a per-machine, elevating, assisted
+; installer can ever be produced:
 ;
-;   INSTALL_MODE_PER_ALL_USERS       - set only when `perMachine: true`.
+;   ONE_CLICK                        - the one-click flow has no install-mode
+;                                      page or elevation handling at all;
+;                                      this deliverable is the assisted UI.
+;   INSTALL_MODE_PER_ALL_USERS       - set only when `perMachine: true`; it
+;                                      selects the machine-wide install root
+;                                      under `$PROGRAMFILES64`.
 ;   MULTIUSER_INSTALLMODE_ALLOW_ELEVATION
 ;                                    - set unless `nsis.allowElevation` is
-;                                      false; without it the assisted mode
-;                                      page disables the "all users" radio
-;                                      for non-admin callers.
-;   ONE_CLICK                        - the one-click flow has no install-mode
-;                                      page at all; this deliverable is the
-;                                      assisted UI.
+;                                      false; the per-machine install relies
+;                                      on it to show the UAC flow.
 ;
-; NOTE: INSTALL_MODE_PER_ALL_USERS_REQUIRED is deliberately NOT guarded: it
-; is defined for every assisted build and only declares the per-machine
-; code path, never selects it.
+; ORDER MATTERS: `MULTIUSER_INSTALLMODE_ALLOW_ELEVATION` is emitted only in the
+; assisted branch of electron-builder's `configureDefines`, so it is mutually
+; exclusive with `ONE_CLICK`. The `ONE_CLICK` guard must be evaluated first so
+; a `oneClick: true` regression aborts with the assisted-installer message
+; instead of the unrelated missing-elevation message.
+;
+; NOTE: INSTALL_MODE_PER_ALL_USERS_REQUIRED is deliberately NOT guarded: it is
+; defined for every assisted build and only declares the per-machine code
+; path, never selects it.
 ; ---------------------------------------------------------------------------
-!ifdef INSTALL_MODE_PER_ALL_USERS
-  !error "youtubetv-for-windows forbids per-machine installs: perMachine must be false"
-!endif
-!ifdef MULTIUSER_INSTALLMODE_ALLOW_ELEVATION
-  !error "youtubetv-for-windows forbids elevation: nsis.allowElevation must be false"
-!endif
 !ifdef ONE_CLICK
   !error "youtubetv-for-windows requires the assisted installer: nsis.oneClick must be false"
+!endif
+!ifndef INSTALL_MODE_PER_ALL_USERS
+  !error "youtubetv-for-windows requires a machine-wide install: nsis.perMachine must be true"
+!endif
+!ifndef MULTIUSER_INSTALLMODE_ALLOW_ELEVATION
+  !error "youtubetv-for-windows requires elevation support: nsis.allowElevation must be true"
 !endif
 
 !ifndef BUILD_UNINSTALLER
@@ -94,43 +103,22 @@
 !define YTVW_NSIS_INCLUDE_GUARD
 
 ; ---------------------------------------------------------------------------
-; customInstallMode (assisted installer only)
-;   Called by the template's install-mode page function
-;   (multiUserUi.nsh: `!ifmacrodef customInstallmode`) before the page is
-;   shown. Forcing $isForceCurrentInstall makes the page select the
-;   per-user mode and skip itself entirely, so an interactive install can
-;   never choose all-users. (Macro names are case-insensitive in NSIS, so
-;   this definition satisfies the lowercase check; proven by probe.)
-;   $isForceCurrentInstall is declared by the template's multiUserUi.nsh;
-;   this macro is only ever inserted there (or by the install-mode test,
-;   which declares the same Var), so no guard is needed.
-;   Silent installs never show the page; they are covered by the customInit
-;   forcing below.
-; ---------------------------------------------------------------------------
-!macro customInstallMode
-  StrCpy $isForceCurrentInstall "1"
-!macroend
-
-; ---------------------------------------------------------------------------
 ; electron-builder hook: runs inside .onInit, after initMultiUser and before
 ; CHECK_APP_RUNNING / uninstallOldVersion / installApplicationFiles.
 ; ---------------------------------------------------------------------------
 !macro customInit
-  ; Force the per-user mode on EVERY installer run, including silent
-  ; invocations and invocations carrying /allusers: initMultiUser may have
-  ; selected per-machine above, and this unconditionally restores CurrentUser
-  ; before anything touches the filesystem or registry. The setter changes
-  ; $installMode and the shell context, but not initMultiUser's installation
-  ; state flags. installer.nsi's later silent consumer reads
-  ; $hasPerMachineInstallation to decide whether to elevate and restore the
-  ; all-users mode, so restore those flags as one per-user state transition.
-  ; The template macro is always defined in real builds (multiUser.nsh is
-  ; unconditionally included); the guard keeps standalone harnesses
-  ; compiling, and the install-mode runtime test proves the guard resolves.
-  !ifmacrodef setInstallModePerUser
-    !insertmacro setInstallModePerUser
-    StrCpy $hasPerMachineInstallation "0"
-    StrCpy $hasPerUserInstallation "1"
+  ; Re-assert the machine-wide install mode on EVERY installer run, including
+  ; silent invocations and invocations carrying /currentuser. A real build
+  ; already selects it through `initMultiUser` (assistedInstaller.nsh calls
+  ; `setInstallModePerAllUsers` under INSTALL_MODE_PER_ALL_USERS), so this is
+  ; idempotent there; it guarantees the machine-wide root and shell context
+  ; are in effect before anything touches the filesystem or registry. The
+  ; template macro is always defined in a real per-machine build (multiUser.nsh
+  ; declares it under INSTALL_MODE_PER_ALL_USERS_REQUIRED, which
+  ; `!oneClick || perMachine` always defines); the guard keeps standalone
+  ; harnesses compiling, and the runtime test proves the guard resolves.
+  !ifmacrodef setInstallModePerAllUsers
+    !insertmacro setInstallModePerAllUsers
   !endif
 !macroend
 
