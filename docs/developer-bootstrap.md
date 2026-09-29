@@ -41,7 +41,7 @@ per command under `release-evidence/`.
 | `npm test` / `npm run test:unit`          | Headless unit chain (`test/**/*.test.mjs` outside `test/electron/`).                                                                                                         |
 | `npm run test:electron`                   | Desktop chain (`test/electron/**/*.test.mjs`), needs the installed Electron binary.                                                                                          |
 | `npm run package`                         | `npm run build` then `electron-builder --win --x64 --publish never`, producing `release-output/youtubetv-for-windows-<version>-x64.exe` plus `release-output/win-unpacked/`. |
-| `npm run verify:artifacts`                | Verifies the versioned x64 installer and exactly one Windows x64 application executable (see below).                                                                         |
+| `npm run verify:artifacts`                | Verifies the versioned x64 installer and the three expected Windows x64 executables (see below).                                                                             |
 | `npm run verify:static`                   | `preflight` + `lint` + `format:check` + `typecheck` + `test:unit`.                                                                                                           |
 | `npm run verify:windows`                  | `test:electron` + `package` + `verify:artifacts`.                                                                                                                            |
 | `npm run verify`                          | `verify:static` then `verify:windows`.                                                                                                                                       |
@@ -149,9 +149,11 @@ from the produced files:
   because electron-builder also emits `win-ia32-unpacked`,
   `win-arm64-unpacked`, and `linux-*`/`mac*` siblings;
 - all recursive `.exe` files under `release-output/` must reduce to exactly
-  the versioned top-level installer plus the one expected application
-  executable (`win-unpacked/<productName>.exe`) — an `elevate.exe` helper or
-  any stray binary fails;
+  three files: the versioned top-level installer, the one expected application
+  executable (`win-unpacked/<productName>.exe`), and electron-builder's
+  per-machine elevation helper (`win-unpacked/resources/elevate.exe`, which
+  `perMachine: true` force-copies into the packaged app). All three are
+  required; a missing helper fails exactly as a fourth stray binary does;
 - exactly one top-level installer must exist and its name must equal the
   versioned convention `<productName>-<version>-x64.exe`, which is also what
   the configured `build.nsis.artifactName` template must render to. The only
@@ -201,10 +203,18 @@ authoring workspace — the formatter gate must be clone-stable.
    `electron --version` output to the pin; there is deliberately no
    hardcoded "supported major" magic number to rot.
 4. Run `npm run package && npm run verify:artifacts` to confirm the new binary
-   still produces exactly one Windows x64 PE32+ executable.
-5. Re-run the live release-certification gates (sign-in persistence, phone
-   control, actual 2160p) before publishing; an Electron upgrade invalidates
-   prior certification evidence.
+   still passes the three-executable artifact contract and that the
+   application executable still reads as a Windows x64 PE32+ image.
+5. Re-run the manual gates `docs/live-sign-in-certification.md` records -
+   ordinary-account sign-in surviving a full relaunch, and the phone-pairing
+   follow-up in the same document - before publishing; an Electron upgrade
+   invalidates that evidence. There is no separate high-resolution
+   certification record to re-run: the 2160p preconditions are the ones the
+   README documents (display resolution, measured bandwidth, the stream's own
+   tiers), so confirm them in the same manual pass. Everything a release
+   claims about the packaged product is carried by the delivery-matrix
+   evidence, checked by `scripts/verify-delivery-matrix.cjs` against
+   `release-evidence-schema/delivery-matrix-evidence.schema.json`.
 
 `electron@44.4.5` is the current pin. The documented upgrade check is the
 binary equality test in `npm run test:electron`, not a prose promise.
