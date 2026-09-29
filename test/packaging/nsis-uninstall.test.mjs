@@ -1,23 +1,30 @@
-// Task-7 uninstaller harness for the committed `build/nsis.include`.
+// Task-8 uninstaller harness for the committed `build/nsis.include`.
 //
 // This suite is the executable proof of the uninstall half: a standalone
 // `.nsi` compiled WITH `BUILD_UNINSTALLER` defined includes the real
-// `build/nsis.include` and drives `customUnInstall` against scratch local and
-// roaming data trees (the `YTVW_*` roots/names are overridden to TEMP
-// directories, so the real `%LOCALAPPDATA%` and `%APPDATA%` are never
-// touched).
+// `build/nsis.include` and drives `customUnInstall` against a scratch
+// ProgramData-shaped machine tree (`YTVW_MACHINE_ROOT` is overridden to a
+// TEMP directory, so the real `%PROGRAMDATA%` is never touched).
+//
+// The tree mirrors `src/main/profile-path.ts`: the machine root holds one
+// `users\<key>` leaf per Windows user, each with `profile` (Chromium session
+// data, including `Cookies`) and `userdata` (Electron userData).
 //
 // Cases:
-//   remove   - populated local and roaming trees, real uninstall flags: both
-//              whole trees are gone, exit 0.
+//   remove   - a populated machine tree, real uninstall flags: the whole
+//              tree is gone, exit 0.
 //   upgrade  - `/KEEP_APP_DATA` (what `uninstallOldVersion` always passes
 //              during an installer-driven upgrade): the tree is kept
-//              byte-identical, exit 0. The sign-in profile survives updates.
-//   locked   - an exclusively-locked roaming file, silent run: nonzero exit
-//              and the locked tree remains. The bilingual message is shown
-//              interactively and skipped (`/SD IDOK`) in silent mode, so this
-//              never hangs.
+//              byte-identical, exit 0. Sign-in survives updates.
+//   locked   - an exclusively-locked `users\<key>\profile\Cookies`, silent
+//              run: nonzero exit and the locked file remains. The bilingual
+//              message is shown interactively and skipped (`/SD IDOK`) in
+//              silent mode, so this never hangs.
 //   missing  - no tree at all: exit 0, nothing happens.
+//   blank    - the base resolves blank (empty `YTVW_MACHINE_ROOT` override):
+//              exit 0 with the on-disk tree untouched, proving the removal
+//              is skipped instead of degenerating to a drive-relative
+//              recursive delete.
 //
 // The NSIS toolchain is the one electron-builder caches. When it is not
 // available every case is reported as an explicit skip with the exact
@@ -38,8 +45,11 @@ const repositoryRoot = path.resolve(
 );
 const includePath = path.join(repositoryRoot, "build", "nsis.include");
 
-const DATA_DIR_NAME = "ytvw-test-profile";
-const ROAMING_DATA_DIR_NAME = "ytvw-test-electron-userdata";
+// The committed `YTVW_MACHINE_DIR_NAME` default; deliberately NOT overridden,
+// so the harness exercises the real directory name.
+const MACHINE_DIR_NAME = "youtubetv-for-windows";
+const USER_KEY_A = "TestUser";
+const USER_KEY_B = "Other.User-2";
 
 function findMakensis() {
   const candidates = [];
@@ -122,12 +132,15 @@ function runSilent(executablePath, args, timeoutMs = 30000) {
   });
 }
 
-function harnessSource(directory) {
+function harnessSource(machineBase, { blankBase = false } = {}) {
   // An uninstaller-mode script needs an install section to exist at all
   // ("invalid script: no sections specified" otherwise) and a
   // `WriteUninstaller` call from install-side code (warning 6020, promoted
   // to an error by `-WX`, otherwise) — mirroring how installer.nsi shapes
   // the real uninstaller build.
+  const machineRootDefine = blankBase
+    ? '!define YTVW_MACHINE_ROOT ""'
+    : `!define YTVW_MACHINE_ROOT "${machineBase}"`;
   return `Unicode true
 Name "ytvw-uninstall-harness"
 OutFile "uninstall-harness.exe"
@@ -143,10 +156,7 @@ RequestExecutionLevel user
 # electron-builder passes to the real uninstaller build.
 !define INSTALL_MODE_PER_ALL_USERS
 !define MULTIUSER_INSTALLMODE_ALLOW_ELEVATION
-!define YTVW_DATA_ROOT "${directory}"
-!define YTVW_DATA_DIR_NAME "${DATA_DIR_NAME}"
-!define YTVW_ROAMING_DATA_ROOT "${directory}\\roaming-root"
-!define YTVW_ROAMING_DATA_DIR_NAME "${ROAMING_DATA_DIR_NAME}"
+${machineRootDefine}
 !addincludedir "${path.dirname(includePath)}"
 !include "nsis.include"
 
@@ -186,16 +196,17 @@ async function runUninstaller(harnessCase, args) {
   ]);
 }
 
-function createCase(t, name) {
+function createCase(t, name, options) {
   const directory = fs.mkdtempSync(
     path.join(os.tmpdir(), `ytvw-uninst-${name}-`),
   );
   t.after(() => {
     fs.rmSync(directory, { recursive: true, force: true });
   });
+  const machineBase = path.join(directory, "machine-base");
   fs.writeFileSync(
     path.join(directory, "harness.nsi"),
-    harnessSource(directory),
+    harnessSource(machineBase, options),
     "utf8",
   );
   compile(path.join(directory, "harness.nsi"));
@@ -203,32 +214,28 @@ function createCase(t, name) {
     directory,
     harness: path.join(directory, "uninstall-harness.exe"),
     uninstaller: path.join(directory, "inner-uninstaller.exe"),
-    dataDirectory: path.join(directory, DATA_DIR_NAME),
-    roamingDataDirectory: path.join(
-      directory,
-      "roaming-root",
-      ROAMING_DATA_DIR_NAME,
-    ),
+    machineBase,
+    machineRoot: path.join(machineBase, MACHINE_DIR_NAME),
   };
 }
 
-function populateTree(dataDirectory, prefix) {
+function populateTree(machineRoot, prefix) {
   const files = {
-    "profile/Cookies": `${prefix}-cookie-bytes`,
-    "profile/Preferences": `${prefix}-{}`,
-    "updates/lock": `${prefix}-lock-bytes`,
-    "update-status/success-abc.json": `{"nonce":"${prefix}-abc"}`,
-    "diagnostics/ENABLED": prefix,
+    [`users\\${USER_KEY_A}\\profile\\Cookies`]: `${prefix}-cookie-bytes`,
+    [`users\\${USER_KEY_A}\\profile\\Preferences`]: `${prefix}-{}`,
+    [`users\\${USER_KEY_A}\\userdata\\Local State`]: `${prefix}-local-state`,
+    [`users\\${USER_KEY_B}\\profile\\Cookies`]: `${prefix}-second-cookie`,
+    [`users\\${USER_KEY_B}\\userdata\\Session Storage\\000003.log`]: `${prefix}-session-bytes`,
   };
   for (const [relative, contents] of Object.entries(files)) {
-    const full = path.join(dataDirectory, relative);
+    const full = path.join(machineRoot, relative);
     fs.mkdirSync(path.dirname(full), { recursive: true });
     fs.writeFileSync(full, contents, "utf8");
   }
   return files;
 }
 
-function snapshotTree(dataDirectory) {
+function snapshotTree(machineRoot) {
   const entries = [];
   const walk = (directory) => {
     for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
@@ -237,78 +244,62 @@ function snapshotTree(dataDirectory) {
         walk(full);
       } else {
         entries.push({
-          relative: path.relative(dataDirectory, full),
+          relative: path.relative(machineRoot, full),
           contents: fs.readFileSync(full, "utf8"),
         });
       }
     }
   };
-  walk(dataDirectory);
+  walk(machineRoot);
   return entries.sort((a, b) => (a.relative < b.relative ? -1 : 1));
 }
 
 test(
-  "a real uninstall removes both local profile and roaming Electron user-data trees",
+  "a real uninstall removes the whole ProgramData machine tree",
   { skip: skipReason },
   async (t) => {
     const harnessCase = createCase(t, "remove");
-    const localBefore = populateTree(harnessCase.dataDirectory, "local");
-    const roamingBefore = populateTree(
-      harnessCase.roamingDataDirectory,
-      "roaming",
-    );
-    assert.ok(Object.keys(localBefore).length > 0);
-    assert.ok(Object.keys(roamingBefore).length > 0);
+    const before = populateTree(harnessCase.machineRoot, "remove");
+    assert.ok(Object.keys(before).length > 0);
 
     const exitCode = await runUninstaller(harnessCase, []);
     assert.equal(exitCode, 0, "a clean removal must succeed");
     assert.equal(
-      fs.existsSync(harnessCase.dataDirectory),
+      fs.existsSync(harnessCase.machineRoot),
       false,
-      "profile, updates, markers, and diagnostics must all be gone",
-    );
-    assert.equal(
-      fs.existsSync(harnessCase.roamingDataDirectory),
-      false,
-      "Electron's default roaming userData tree must also be gone",
+      "every users/<key> profile and userdata leaf must be gone with the machine root",
     );
   },
 );
 
 test(
-  "an upgrade uninstall keeps local profile and roaming Electron user-data trees byte-identical",
+  "an upgrade uninstall keeps the machine tree byte-identical",
   { skip: skipReason },
   async (t) => {
     const harnessCase = createCase(t, "upgrade");
-    populateTree(harnessCase.dataDirectory, "local");
-    populateTree(harnessCase.roamingDataDirectory, "roaming");
-    const localBefore = snapshotTree(harnessCase.dataDirectory);
-    const roamingBefore = snapshotTree(harnessCase.roamingDataDirectory);
+    populateTree(harnessCase.machineRoot, "upgrade");
+    const before = snapshotTree(harnessCase.machineRoot);
 
     const exitCode = await runUninstaller(harnessCase, ["/KEEP_APP_DATA"]);
     assert.equal(exitCode, 0, "the upgrade path must succeed");
     assert.deepEqual(
-      snapshotTree(harnessCase.dataDirectory),
-      localBefore,
-      "the local sign-in profile must survive updates",
-    );
-    assert.deepEqual(
-      snapshotTree(harnessCase.roamingDataDirectory),
-      roamingBefore,
-      "Electron's roaming userData tree must survive updates",
+      snapshotTree(harnessCase.machineRoot),
+      before,
+      "every user's sign-in profile must survive updates",
     );
   },
 );
 
 test(
-  "a locked roaming tree fails with a nonzero exit and keeps the locked tree",
+  "a locked Cookies file fails with a nonzero exit and keeps the locked file",
   { skip: skipReason },
   async (t) => {
     const harnessCase = createCase(t, "locked");
-    populateTree(harnessCase.dataDirectory, "local");
-    populateTree(harnessCase.roamingDataDirectory, "roaming");
+    populateTree(harnessCase.machineRoot, "locked");
     const lockedFile = path.join(
-      harnessCase.roamingDataDirectory,
+      harnessCase.machineRoot,
+      "users",
+      USER_KEY_A,
       "profile",
       "Cookies",
     );
@@ -364,8 +355,26 @@ test(
   { skip: skipReason },
   async (t) => {
     const harnessCase = createCase(t, "missing");
-    assert.equal(fs.existsSync(harnessCase.dataDirectory), false);
+    assert.equal(fs.existsSync(harnessCase.machineRoot), false);
     const exitCode = await runUninstaller(harnessCase, []);
     assert.equal(exitCode, 0);
+  },
+);
+
+test(
+  "a blank base is a successful no-op that leaves the on-disk tree untouched",
+  { skip: skipReason },
+  async (t) => {
+    const harnessCase = createCase(t, "blank", { blankBase: true });
+    populateTree(harnessCase.machineRoot, "blank");
+    const before = snapshotTree(harnessCase.machineRoot);
+
+    const exitCode = await runUninstaller(harnessCase, []);
+    assert.equal(exitCode, 0, "a blank base must not fail the uninstall");
+    assert.deepEqual(
+      snapshotTree(harnessCase.machineRoot),
+      before,
+      "a blank base must skip the removal instead of deleting drive-relatively",
+    );
   },
 );

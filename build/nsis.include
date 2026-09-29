@@ -28,8 +28,10 @@
 ; TWO HALVES, ONE SOURCE: electron-builder compiles the same source tree
 ; twice, once as the installer and once as the uninstaller with
 ; BUILD_UNINSTALLER defined. The installer hooks below are wrapped in
-; `!ifndef BUILD_UNINSTALLER`; the profile-removing uninstaller half at the
-; bottom is wrapped in `!ifdef BUILD_UNINSTALLER`. The packaging configuration
+; `!ifndef BUILD_UNINSTALLER`; the ProgramData-tree-removing uninstaller half
+; at the bottom is wrapped in `!ifdef BUILD_UNINSTALLER`. Everything both
+; halves must agree on lives in the always-compiled region between the two.
+; The packaging configuration
 ; passes `-WX` (warnings-as-errors), so NSIS warning 6001 ("unused variable")
 ; is an error in BOTH compile modes: every `Var` must be referenced in every
 ; mode in which it is declared.
@@ -44,9 +46,13 @@
 ;                               missing per-machine/elevation define or a
 ;                               one-click config aborts the build with an
 ;                               error;
+;   shared define             - YTVW_MACHINE_DIR_NAME, the one directory name
+;                               both halves must agree on; it lives in the
+;                               always-compiled region because a define inside
+;                               either half is invisible to the other compile;
 ;   !ifndef BUILD_UNINSTALLER - the installer hooks (customInit /
 ;                               customInstall);
-;   !ifdef  BUILD_UNINSTALLER - the profile-removing uninstaller half
+;   !ifdef  BUILD_UNINSTALLER - the ProgramData-tree-removing uninstaller half
 ;                               (customUnInstall).
 ;
 ; UNINSTALLER BUILD: electron-builder compiles the same source tree a second
@@ -97,6 +103,22 @@
   !error "youtubetv-for-windows requires elevation support: nsis.allowElevation must be true"
 !endif
 
+; ---------------------------------------------------------------------------
+; SHARED MACHINE ROOT NAME
+;
+; The installer half creates and ACLs `$PROGRAMDATA\<name>`; the uninstaller
+; half removes that same tree. Both halves compile from this one file in
+; DIFFERENT modes (`!ifndef BUILD_UNINSTALLER` and `!ifdef BUILD_UNINSTALLER`),
+; so a define placed inside either half is invisible to the other compile.
+; The name therefore lives here, in the always-compiled region, `!ifndef`-
+; guarded so a harness can still override it before this include is inserted.
+; The BASE directory (`YTVW_MACHINE_ROOT`) stays a per-half runtime decision:
+; the installer resolves it when it runs, the uninstaller when it runs.
+; ---------------------------------------------------------------------------
+!ifndef YTVW_MACHINE_DIR_NAME
+  !define YTVW_MACHINE_DIR_NAME "youtubetv-for-windows"
+!endif
+
 !ifndef BUILD_UNINSTALLER
 
 !ifndef YTVW_NSIS_INCLUDE_GUARD
@@ -127,9 +149,6 @@
 ; resolved path so a standalone harness can force a failing grant; the real
 ; build always uses $SYSDIR\icacls.exe.
 ; ---------------------------------------------------------------------------
-!ifndef YTVW_MACHINE_DIR_NAME
-  !define YTVW_MACHINE_DIR_NAME "youtubetv-for-windows"
-!endif
 !define YTVW_ACL_FAILURE_MESSAGE "無法建立或設定應用程式資料目錄的權限，安裝已中止。$\r$\nThe application data directory could not be created or its permissions granted; the installation was aborted.$\r$\n($1)$\r$\n(icacls exit $2)"
 
 ; ---------------------------------------------------------------------------
@@ -203,7 +222,7 @@
 !endif ; BUILD_UNINSTALLER
 
 ; ===========================================================================
-; youtubetv-for-windows - profile-removing uninstaller (todo 7)
+; youtubetv-for-windows - profile-removing uninstaller (todos 7-8)
 ; ===========================================================================
 ;
 ; This half of the include compiles ONLY for the uninstaller build
@@ -226,13 +245,30 @@
 ; the data tree. Failing open here keeps credentials; it never destroys
 ; them.
 ;
-; REMOVED TREES (fixed conventions):
-;   ${YTVW_DATA_ROOT}\${YTVW_DATA_DIR_NAME}
-;     == %LOCALAPPDATA%\youtubetv-for-windows in production
-;     (profile + updates + update-status + diagnostics)
-;   ${YTVW_ROAMING_DATA_ROOT}\${YTVW_ROAMING_DATA_DIR_NAME}
-;     == %APPDATA%\youtubetv-for-windows in production
-;     (Electron's default userData cache and configuration)
+; REMOVED TREE (fixed convention):
+;   <machine base>\${YTVW_MACHINE_DIR_NAME}
+;     == %PROGRAMDATA%\youtubetv-for-windows in production
+;     (the machine root, containing users\<key>\profile and
+;     users\<key>\userdata for every Windows user)
+;
+; SCOPE TRAP: the installer half's `YTVW_MACHINE_DIR_NAME` lives INSIDE
+; `!ifndef BUILD_UNINSTALLER`, so the uninstaller compile never sees it.
+; The uninstaller half therefore re-declares the same `!ifndef`-guarded
+; default below instead of assuming the installer half's define is visible.
+;
+; $PROGRAMDATA is not a built-in NSIS variable in this toolchain (warning
+; 6000, promoted to an error by -WX), so the base is read at uninstall time
+; with `ReadEnvStr "ProgramData"`. `YTVW_MACHINE_ROOT`, when defined before
+; this include, overrides that read so a standalone harness can point the
+; removal at a scratch directory; the real build always uses the ProgramData
+; environment variable.
+;
+; BLANK BASE: when the resolved base is blank (missing variable), the removal
+; is skipped as a missing-tree no-op (exit 0, nothing touched). A blank base
+; would otherwise make the removal target drive-relative
+; (`"\youtubetv-for-windows"`), and a drive-relative recursive delete is a
+; catastrophic bug, not a style issue. Skipping matches the required
+; missing-tree no-op: there is no addressable machine tree to remove.
 ;
 ; LOCK FAILURE: after `RMDir /r`, any surviving file under the data tree
 ; means a handle is still open (the app did not shut down, or a lock
@@ -252,28 +288,23 @@
 !ifndef YTVW_NSIS_UNINSTALL_GUARD
 !define YTVW_NSIS_UNINSTALL_GUARD
 
-!ifndef YTVW_DATA_DIR_NAME
-  !define YTVW_DATA_DIR_NAME "youtubetv-for-windows"
-!endif
-!ifndef YTVW_DATA_ROOT
-  !define YTVW_DATA_ROOT "$LOCALAPPDATA"
-!endif
-!ifndef YTVW_ROAMING_DATA_DIR_NAME
-  !define YTVW_ROAMING_DATA_DIR_NAME "youtubetv-for-windows"
-!endif
-!ifndef YTVW_ROAMING_DATA_ROOT
-  !define YTVW_ROAMING_DATA_ROOT "$APPDATA"
+!ifndef YTVW_MACHINE_DIR_NAME
+  !define YTVW_MACHINE_DIR_NAME "youtubetv-for-windows"
 !endif
 
 Var ytvwUnParameters
 Var ytvwUnKeepFlag
+Var ytvwUnBase
+Var ytvwUnRoot
 
 ; ---------------------------------------------------------------------------
 ; YTVW_REMOVE_DATA_DIRECTORY
-;   Removes both whole per-user data trees, except on the upgrade path
+;   Removes the whole machine data tree, except on the upgrade path
 ;   (`/KEEP_APP_DATA` on the uninstaller command line), where it returns
-;   without touching either tree. On a lock failure it reports bilingually and
+;   without touching the tree. On a lock failure it reports bilingually and
 ;   aborts the uninstall with a nonzero exit.
+;   Registers: $ytvwUnParameters command line, $ytvwUnKeepFlag flag value,
+;   $ytvwUnBase resolved base, $ytvwUnRoot machine root.
 ; ---------------------------------------------------------------------------
 !macro YTVW_REMOVE_DATA_DIRECTORY
   ${GetParameters} $ytvwUnParameters
@@ -287,13 +318,27 @@ Var ytvwUnKeepFlag
     Goto ytvwUnRemoveDone
   ${EndIf}
   ClearErrors
-  RMDir /r "${YTVW_DATA_ROOT}\${YTVW_DATA_DIR_NAME}"
-  RMDir /r "${YTVW_ROAMING_DATA_ROOT}\${YTVW_ROAMING_DATA_DIR_NAME}"
+  !ifdef YTVW_MACHINE_ROOT
+    StrCpy $ytvwUnBase "${YTVW_MACHINE_ROOT}"
+  !else
+    ReadEnvStr $ytvwUnBase "ProgramData"
+  !endif
+  ${If} $ytvwUnBase == ""
+    ; A blank base would make the removal target drive-relative
+    ; (`"\youtubetv-for-windows"`). ReadEnvStr leaves the variable empty when
+    ; the environment variable is absent, so the guard covers both the blank
+    ; and the missing case. Skipped as a missing-tree no-op: there is no
+    ; addressable machine tree to remove.
+    ClearErrors
+    Goto ytvwUnRemoveDone
+  ${EndIf}
+  StrCpy $ytvwUnRoot "$ytvwUnBase\${YTVW_MACHINE_DIR_NAME}"
   ClearErrors
-  IfFileExists "${YTVW_DATA_ROOT}\${YTVW_DATA_DIR_NAME}\*.*" ytvwUnRemoveFailed 0
-  IfFileExists "${YTVW_ROAMING_DATA_ROOT}\${YTVW_ROAMING_DATA_DIR_NAME}\*.*" ytvwUnRemoveFailed ytvwUnRemoveDone
+  RMDir /r "$ytvwUnRoot"
+  ClearErrors
+  IfFileExists "$ytvwUnRoot\*.*" ytvwUnRemoveFailed ytvwUnRemoveDone
   ytvwUnRemoveFailed:
-  MessageBox MB_OK|MB_ICONEXCLAMATION "無法移除設定檔與應用程式資料，請先關閉應用程式後再執行解除安裝。$\r$\nThe profile and application data could not be removed. Close the app and run the uninstaller again.$\r$\n(${YTVW_DATA_ROOT}\${YTVW_DATA_DIR_NAME})$\r$\n(${YTVW_ROAMING_DATA_ROOT}\${YTVW_ROAMING_DATA_DIR_NAME})" /SD IDOK
+  MessageBox MB_OK|MB_ICONEXCLAMATION "無法移除設定檔與應用程式資料，請先關閉應用程式後再執行解除安裝。$\r$\nThe profile and application data could not be removed. Close the app and run the uninstaller again.$\r$\n($ytvwUnRoot)" /SD IDOK
   Abort
   ytvwUnRemoveDone:
 !macroend

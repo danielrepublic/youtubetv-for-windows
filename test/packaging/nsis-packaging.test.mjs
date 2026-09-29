@@ -10,9 +10,9 @@
 //   - exactly one `nsis`/`x64` Windows target, machine-wide install with UAC,
 //     the Start-menu shortcut, committed include wiring, and the versioned
 //     `<product>-<version>-x64.exe` installer convention;
-//   - the uninstaller half removes the exact profile directory named by
-//     `src/main/profile-path.ts`, keeps it on the `/KEEP_APP_DATA` upgrade
-//     path, and fails bilingually (never silently) on a lock;
+//   - the uninstaller half removes the single ProgramData machine tree named
+//     by `src/main/profile-path.ts`, keeps it on the `/KEEP_APP_DATA`
+//     upgrade path, and fails bilingually (never silently) on a lock;
 //   - the installer half keeps the per-user enforcement hooks and contains
 //     none of the retired update-handoff protocol.
 
@@ -175,7 +175,7 @@ test("the package script emits the installer and nothing else", () => {
   );
 });
 
-test("the uninstaller half removes exactly the profile directory", () => {
+test("the uninstaller half removes exactly the ProgramData machine tree", () => {
   const source = fs.readFileSync(includePath, "utf8");
   assert.match(source, /!macro customUnInstall/);
   assert.match(source, /!macro YTVW_REMOVE_DATA_DIRECTORY/);
@@ -183,8 +183,34 @@ test("the uninstaller half removes exactly the profile directory", () => {
   assert.match(source, /RMDir \/r/);
   assert.ok(
     source.includes(PROFILE_DIRECTORY_NAME),
-    `the include must name the profile directory "${PROFILE_DIRECTORY_NAME}" from profile-path.ts`,
+    `the include must name the machine directory "${PROFILE_DIRECTORY_NAME}" from profile-path.ts`,
   );
+  const uninstallHalf = source.slice(
+    source.indexOf("!ifdef BUILD_UNINSTALLER"),
+  );
+  assert.match(
+    uninstallHalf,
+    /ReadEnvStr.*ProgramData/,
+    "the uninstaller half must resolve its base from the ProgramData environment",
+  );
+  assert.match(
+    uninstallHalf,
+    /YTVW_MACHINE_DIR_NAME/,
+    "the uninstaller half must remove the single machine directory name",
+  );
+  for (const retired of [
+    "YTVW_DATA_ROOT",
+    "YTVW_DATA_DIR_NAME",
+    "YTVW_ROAMING_DATA_ROOT",
+    "YTVW_ROAMING_DATA_DIR_NAME",
+    "$LOCALAPPDATA",
+    "$APPDATA",
+  ]) {
+    assert.ok(
+      !uninstallHalf.includes(retired),
+      `the per-user root "${retired}" must not survive in the uninstaller half`,
+    );
+  }
 });
 
 test("a locked profile fails bilingually instead of silently", () => {
