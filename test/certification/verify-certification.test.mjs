@@ -182,6 +182,26 @@ test("accepts the complete synthetic fixture and labels it non-real", () => {
   fs.rmSync(fixture.root, { recursive: true, force: true });
 });
 
+// DEFECT CRLF: sectionFor()'s heading test used (?:\n|$) without the s
+// flag, and "." never matches "\r", so on a CRLF record no heading ever
+// matched, every hard-gate section read as empty, and a complete record was
+// rejected. The table pattern was measured innocent: it matches a CRLF row
+// in isolation. This locks LF/CRLF parity for the complete record.
+test("treats a CRLF record exactly like the identical LF record", () => {
+  const record = syntheticRecord();
+  const lf = writeFixture(record);
+  const crlfText = record.replace(/\n/g, "\r\n");
+  assert.match(crlfText, /\r\n/, "the probe must really be CRLF");
+  const crlf = writeFixture(record);
+  fs.writeFileSync(crlf.recordPath, crlfText, "utf8");
+  const lfResult = validateRecord(lf.recordPath, CANDIDATE);
+  const crlfResult = validateRecord(crlf.recordPath, CANDIDATE);
+  assert.deepEqual(lfResult.failures, []);
+  assert.deepEqual(crlfResult, lfResult);
+  fs.rmSync(lf.root, { recursive: true, force: true });
+  fs.rmSync(crlf.root, { recursive: true, force: true });
+});
+
 // DEFECT D1: the colon branch of valueFor() used to let the \s* after the
 // colon cross a line break, so an empty required field silently borrowed the
 // next line's text and was never reported missing. Two labels are probed

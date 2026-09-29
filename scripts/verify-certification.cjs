@@ -45,7 +45,11 @@ function valueFor(text, label) {
 function sectionFor(text, heading) {
   const parts = text.split(/^##\s+/m);
   const part = parts.find((candidate) =>
-    new RegExp(`^.*${escapeRegExp(heading)}.*(?:\n|$)`, "i").test(candidate),
+    // \r? matters: without the s flag "." never matches "\r", so on a
+    // CRLF heading line the trailing ".*" cannot consume the "\r" and a
+    // bare (?:\n|$) never matches there. The guard then saw every section
+    // as empty and rejected complete CRLF records.
+    new RegExp(`^.*${escapeRegExp(heading)}.*(?:\r?\n|$)`, "i").test(candidate),
   );
   if (!part) return "";
   const newline = part.indexOf("\n");
@@ -133,7 +137,10 @@ function validateRecord(recordPath, expectedVersion) {
   const failures = [];
   let text;
   try {
-    text = fs.readFileSync(recordPath, "utf8");
+    // Normalize line endings once, here at the read boundary: a maintainer on
+    // Windows can save the record with CRLF, and `.` in a regex excludes \r,
+    // so sectionFor()'s heading test rejects a record that is in fact correct.
+    text = fs.readFileSync(recordPath, "utf8").replace(/\r\n?/g, "\n");
   } catch {
     return { failures: [`cannot read certification record ${recordPath}`] };
   }
