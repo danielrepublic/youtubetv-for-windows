@@ -49,6 +49,7 @@ const REQUIRED_ZH_HEADINGS = [
   "### 系統需求",
   "### 下載：只要認一個安裝檔",
   "### 安裝",
+  "### 已經安裝過：重新安裝、解除安裝或取消",
   "### SmartScreen 警告",
   "### 第一次啟動與全螢幕",
   "### 登入",
@@ -67,6 +68,7 @@ const REQUIRED_EN_HEADINGS = [
   "### Requirements",
   "### Download: trust exactly one installer",
   "### Install",
+  "### Already installed: reinstall, uninstall, or cancel",
   "### About the SmartScreen warning",
   "### First launch and fullscreen",
   "### Sign-in",
@@ -132,6 +134,89 @@ test("the documented support URL matches dialogs.ts", () => {
     "https://github.com/danielrepublic/youtubetv-for-windows/releases/latest",
   );
   assert.ok(readme.includes(SUPPORT_RELEASE_URL));
+});
+
+// The install is machine-wide and elevating, and the data root is the
+// machine-wide ProgramData tree. Every literal below is derived from the
+// shipped sources (package.json's product name names the per-machine install
+// directory; profile-path.ts exports the data-root directory names), so a
+// regression in either one fails the docs instead of being documented around.
+const MACHINE_INSTALL_ROOT = `C:\\Program Files\\${manifest.build.productName}`;
+const MACHINE_DATA_ROOT = `C:\\ProgramData\\${PROFILE_DIRECTORY_NAME}`;
+const ENV_DATA_ROOT = `%PROGRAMDATA%\\${PROFILE_DIRECTORY_NAME}`;
+const PER_USER_ROOT = `${ENV_DATA_ROOT}\\${USERS_DIRECTORY_NAME}\\<key>`;
+
+test("both halves name the install root, the UAC step, and the data root", () => {
+  for (const half of [zhHalf, enHalf]) {
+    for (const [description, literal] of [
+      ["machine-wide install root", MACHINE_INSTALL_ROOT],
+      ["machine-wide data root", MACHINE_DATA_ROOT],
+      ["data root in environment form", ENV_DATA_ROOT],
+      ["per-user subdirectory", PER_USER_ROOT],
+    ]) {
+      assert.ok(
+        half.includes(literal),
+        `each README half must document the ${description} ${literal}`,
+      );
+    }
+    assert.ok(
+      half.includes("UAC"),
+      "each README half must name the elevation prompt, because installing needs administrator rights",
+    );
+  }
+});
+
+test("both halves state that uninstall removes the whole machine-wide data root", () => {
+  for (const half of [zhHalf, enHalf]) {
+    assert.ok(
+      half
+        .split("\n")
+        .some(
+          (line) =>
+            line.includes(MACHINE_DATA_ROOT) &&
+            /uninstall|解除安裝/i.test(line),
+        ),
+      "one line per half must tie the data root to the uninstall, so the removal rule is findable",
+    );
+  }
+});
+
+test("every shipped already-installed chooser string is quoted in both halves", () => {
+  // The chooser wording is the app-owned language contract: it is read from
+  // build/nsis.include rather than restated here, so a rename in the installer
+  // breaks this suite instead of leaving the README quoting stale buttons.
+  // Both halves carry every segment, because the page itself shows both
+  // languages regardless of which half the reader is on.
+  const nsisInclude = readDoc("build/nsis.include");
+  const CHOOSER_DEFINES = [
+    "YTVW_CHOOSER_TITLE",
+    "YTVW_CHOOSER_REINSTALL",
+    "YTVW_CHOOSER_UNINSTALL",
+    "YTVW_CHOOSER_CANCEL",
+  ];
+  for (const name of CHOOSER_DEFINES) {
+    const match = new RegExp(`!define\\s+${name}\\s+"([^"]*)"`).exec(
+      nsisInclude,
+    );
+    assert.ok(match !== null, `build/nsis.include must define ${name}`);
+    const segments = match[1]
+      .replaceAll("$\\r$\\n", "\n")
+      .split("\n")
+      .map((segment) => segment.trim())
+      .filter((segment) => segment.length > 0);
+    assert.ok(
+      segments.length > 0,
+      `${name} must expand to at least one non-empty line`,
+    );
+    for (const half of [zhHalf, enHalf]) {
+      for (const segment of segments) {
+        assert.ok(
+          half.includes(segment),
+          `each README half must quote the shipped ${name} text ${segment}`,
+        );
+      }
+    }
+  }
 });
 
 test("Traditional Chinese documents contain no Simplified-only characters", () => {

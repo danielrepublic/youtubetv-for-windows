@@ -168,11 +168,13 @@ from the produced files:
   (`.zip .7z .msi .msix .msixbundle .appx .appxbundle`) are rejected by
   extension.
 
-`npm run package` builds the full per-user x64 NSIS installer (assisted UI,
-per-user install root without UAC, Start-menu shortcut, committed
-`build/nsis.include`, and the profile-removing uninstaller). The installer stub
-itself is name/count-checked only — NSIS stubs are not x64 images, so the PE
-arch guard applies to the application executable.
+`npm run package` builds the machine-wide x64 NSIS installer: assisted UI,
+`perMachine: true` (install root `C:\Program Files\youtubetv-for-windows`),
+`allowElevation: true` (UAC), Start-menu shortcut, committed
+`build/nsis.include`, and the uninstaller that removes the machine-wide data
+root `C:\ProgramData\youtubetv-for-windows` unless `/KEEP_APP_DATA` is passed.
+The installer stub itself is name/count-checked only; NSIS stubs are not x64
+images, so the PE arch guard applies to the application executable.
 
 ## Evidence
 

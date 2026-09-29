@@ -60,10 +60,13 @@ build. When it exists, the app appends JSON Lines to:
 ```
 
 `<key>` is the Windows user name taken from the basename of `%USERPROFILE%`,
-sanitized to `[A-Za-z0-9._-]`; step 2 below derives it exactly.
+sanitized to `[A-Za-z0-9._-]`; step 2 below derives it exactly. The root holding
+it is the machine-wide data tree `C:\ProgramData\youtubetv-for-windows`
+(`%PROGRAMDATA%\youtubetv-for-windows`), which the installer creates and ACLs at
+install time; a live capture has to land in that tree on the certified machine.
 
-The `diagnostics` directory is a sibling of the persistent `profile` directory.
-The uninstaller (todo 8) must remove the whole
+The `diagnostics` directory is a sibling of the persistent `profile` directory,
+both under that ProgramData tree. The uninstaller removes the whole
 `%PROGRAMDATA%\youtubetv-for-windows` tree, which covers every user's
 diagnostics, profile and userdata directories.
 

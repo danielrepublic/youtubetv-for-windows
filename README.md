@@ -25,7 +25,8 @@ Watch YouTube TV (`https://www.youtube.com/tv`) in a fullscreen Windows app.
 ### 系統需求
 
 - 64 位元 Windows 10 或 Windows 11（僅 x64，不支援 x86 與 ARM64）。
-- 一般使用者帳號即可，不需要系統管理員權限，安裝時不會跳出 UAC。
+- 安裝與解除安裝需要系統管理員權限。Windows 會跳出「使用者帳戶控制」（UAC）提示，請按「是」。安裝完成後，程式本身以一般使用者的身分啟動，不會再要求提權。
+- 這是整台電腦共用的安裝，程式本體放在 `C:\Program Files\youtubetv-for-windows`。同一台電腦上的每個 Windows 使用者共用這個資料夾，但各有自己的設定與登入資料（見「你的資料存在哪裡」）。
 - 看 4K 需要另外的條件，見「4K 播放條件」。
 
 ### 下載：只要認一個安裝檔
@@ -47,9 +48,32 @@ youtubetv-for-windows-<版本>-x64.exe
 ### 安裝
 
 1. 從上面的發佈頁下載 `youtubetv-for-windows-<版本>-x64.exe`。
-2. 雙擊執行。此時可能先跳出 SmartScreen 警告，處理方式見下一節。
-3. 依照安裝精靈完成安裝。安裝是「只給目前使用者」的，不需要管理員權限。
-4. 完成後從開始功能表的 `youtubetv-for-windows` 捷徑啟動（安裝程式也可能提供桌面捷徑與完成後直接啟動的選項）。
+2. 雙擊執行。此時可能先跳出 SmartScreen 警告，處理方式見「SmartScreen 警告」。
+3. UAC 提示按「是」。這個提示不能略過：安裝程式要寫入 `C:\Program Files\youtubetv-for-windows` 與 `C:\ProgramData\youtubetv-for-windows`，兩者都是整台電腦共用的系統位置，只有系統管理員寫得進去。
+4. 依照安裝精靈完成安裝。程式會裝到 `C:\Program Files\youtubetv-for-windows`，這台電腦上的每個 Windows 使用者都裝同一份。
+5. 完成後從開始功能表的 `youtubetv-for-windows` 捷徑啟動（安裝程式也可能提供桌面捷徑與完成後直接啟動的選項）。
+
+這台電腦已經裝過這個程式的話，安裝程式會先問你要怎麼辦，見「已經安裝過：重新安裝、解除安裝或取消」。
+
+### 已經安裝過：重新安裝、解除安裝或取消
+
+安裝程式偵測到這台電腦上已經有這個程式時，會跳出一個選單畫面。標題和下面三個選項都是安裝程式裡寫死的字串，中英文並排顯示：
+
+```text
+youtubetv-for-windows 已安裝 / Already installed
+```
+
+- **重新安裝（保留你的設定與登入狀態）**
+  Reinstall (keep your settings and sign-in)
+  資料結果：你的設定與登入狀態原封不動地留下，只有程式檔案換成新版本。這是預設選項。
+- **解除安裝並刪除所有資料**
+  Uninstall and delete all data
+  資料結果：程式本身與 `C:\ProgramData\youtubetv-for-windows` 整棵資料樹都會被刪掉，包含你的設定與登入狀態。下次裝回來要重新登入。
+- **取消**
+  Cancel
+  資料結果：什麼都不動。設定、登入狀態和已安裝的程式保持原樣，安裝程式直接結束。
+
+安裝程式也把更早期「只給單一帳號」版本留下的檔案算成已安裝，同樣跳這個畫面。那個舊版本請用 Windows 的「設定 → 應用程式」移除；解除安裝程式不會搬走、也不會刪掉舊版本留在你個人資料夾裡的資料，見「你的資料存在哪裡」。
 
 ### SmartScreen 警告
 
@@ -97,24 +121,39 @@ youtubetv-for-windows-<版本>-x64.exe
 | ---------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
 | 「YouTube TV 無法載入 / failed to load」 | 先按「重試 (Retry)」。網路沒問題但一直失敗，可選「在瀏覽器中開啟 (Open in browser)」或「支援 (Support)」。 |
 | 設定檔損壞的提示                         | 程式會改用暫時設定檔啟動，這次的登入不會保留。檢查磁碟權限後重新啟動即可恢復。                             |
+| UAC 提示按了「否」或安裝失敗             | 沒有系統管理員權限就寫不進 `C:\Program Files`。請改用有權限的帳號，或請管理員代為安裝。                    |
 
 ### 換新版本
 
 換新版本只有一條路，就是手動下載：
 
 1. 到 `https://github.com/danielrepublic/youtubetv-for-windows/releases/latest` 下載最新的 `youtubetv-for-windows-<版本>-x64.exe`。
-2. 直接執行安裝。重新安裝不會刪掉你的設定檔，登入狀態會保留。
+2. 執行它。已經裝過的話，安裝程式會先問你要「重新安裝」還是「解除安裝」，見「已經安裝過：重新安裝、解除安裝或取消」。
+
+只要選「重新安裝」，`C:\ProgramData\youtubetv-for-windows` 整棵資料樹都不會被動，登入狀態會留著。
 
 ### 解除安裝會刪掉什麼
 
-- 用 Windows 的「設定 → 應用程式」或控制台移除程式。
-- 解除安裝會刪掉程式本身，以及你電腦上的所有相關資料：登入狀態與瀏覽設定檔（`%PROGRAMDATA%\youtubetv-for-windows\users\<key>\profile`）、快取，以及使用者資料（`%PROGRAMDATA%\youtubetv-for-windows\users\<key>\userdata`）。刪掉就是真的刪掉，登入要重來。
+- 用 Windows 的「設定 → 應用程式」或控制台移除程式；也可以重跑安裝檔，在選單裡選「解除安裝並刪除所有資料」。兩種做法都會跳出 UAC，解除安裝同樣需要系統管理員權限。
+- 解除安裝會刪掉兩整塊：安裝資料夾 `C:\Program Files\youtubetv-for-windows`（程式本身），以及資料根目錄 `C:\ProgramData\youtubetv-for-windows` 底下的整棵樹，也就是這台電腦上所有 Windows 使用者的設定檔與使用者資料。
+- 你的設定檔在 `%PROGRAMDATA%\youtubetv-for-windows\users\<key>\profile`（Cookie、快取、登入狀態），使用者資料在 `%PROGRAMDATA%\youtubetv-for-windows\users\<key>\userdata`。刪掉就是真的刪掉，沒有任何復原（no rollback），下次裝回來要重新登入。
+- 唯一的例外是換版本：安裝程式在覆蓋舊版本時，會叫解除安裝程式保留資料再裝新的，那一輪資料會留下來。只有你自己發起的解除安裝會刪資料。
 - 重新安裝不會動到設定檔，只有解除安裝會清除。
 
 ### 你的資料存在哪裡
 
+資料放在整台電腦共用的資料根目錄 `C:\ProgramData\youtubetv-for-windows`（環境變數寫法是 `%PROGRAMDATA%\youtubetv-for-windows`），底下每個 Windows 使用者一個自己的資料夾：
+
+- 你的資料夾：`%PROGRAMDATA%\youtubetv-for-windows\users\<key>`。`<key>` 是你 Windows 帳號名稱去掉不合法字元後的名字。
 - 設定檔：`%PROGRAMDATA%\youtubetv-for-windows\users\<key>\profile`（Cookie、快取、登入狀態）。
-- 完整說明見 [`docs/privacy.md`](docs/privacy.md)。
+- 使用者資料：`%PROGRAMDATA%\youtubetv-for-windows\users\<key>\userdata`（Electron 的快取與設定）。
+- 診斷紀錄（預設關閉）：`%PROGRAMDATA%\youtubetv-for-windows\users\<key>\diagnostics`。
+
+放在這裡有兩個好處：每個 Windows 使用者各有自己的子資料夾，兩個人不會共用同一份登入狀態；資料根目錄不在你的個人資料夾裡，所以換帳號或重灌系統時比較容易整棵一起處理。`C:\ProgramData` 預設只有系統管理員寫得進去，所以安裝程式會把這個資料根目錄的權限開放給本機的 Users 群組。
+
+資料根目錄是搬過來的，這點要說清楚：早期版本是「只給單一帳號」的安裝，資料放在你的個人資料夾，當年的說明寫的是 `%LOCALAPPDATA%\youtubetv-for-windows\profile`。舊資料不會被自動搬到新位置，程式也不會去讀它，所以你在舊位置的設定與登入狀態等於要重來一次。舊檔案要你自己刪，解除安裝也不會刪到那裡。
+
+完整說明見 [`docs/privacy.md`](docs/privacy.md)。
 
 ### 支援
 
@@ -144,7 +183,8 @@ Please read the disclosure below before you install.
 ### Requirements
 
 - 64-bit Windows 10 or Windows 11 (x64 only; x86 and ARM64 are not supported).
-- A standard user account is enough. You don't need admin rights, and you won't see a UAC prompt.
+- Installing and uninstalling needs administrator rights. Windows shows a User Account Control (UAC) prompt; answer yes. Once installed, the app itself launches as a standard user and never asks to elevate again.
+- This is a machine-wide install. The program files go to `C:\Program Files\youtubetv-for-windows`, shared by every Windows user on the PC, while each user keeps a separate settings and sign-in store (see "Where your data lives").
 - 4K needs extra conditions; see "4K playback" below.
 
 ### Download: trust exactly one installer
@@ -167,8 +207,31 @@ For example `youtubetv-for-windows-0.1.0-x64.exe`. That is the only file to run;
 
 1. Download `youtubetv-for-windows-<version>-x64.exe` from the release page above.
 2. Double-click it. SmartScreen will likely warn you first; the next section covers that.
-3. Follow the installer. It's per-user for the current account, and it never needs admin rights.
-4. Launch it from the `youtubetv-for-windows` Start-menu shortcut (the installer may also offer a desktop shortcut and a launch-after-finish option).
+3. Answer yes at the UAC prompt. It can't be skipped: the installer writes to `C:\Program Files\youtubetv-for-windows` and `C:\ProgramData\youtubetv-for-windows`, two machine-wide system locations that a standard account cannot write to.
+4. Follow the installer. It installs to `C:\Program Files\youtubetv-for-windows`, one copy for every Windows user on this PC.
+5. Launch it from the `youtubetv-for-windows` Start-menu shortcut (the installer may also offer a desktop shortcut and a launch-after-finish option).
+
+If the app is already on this PC, the installer asks what to do first; see "Already installed: reinstall, uninstall, or cancel".
+
+### Already installed: reinstall, uninstall, or cancel
+
+When the installer finds the app already on this PC, it shows a chooser. The title and the three options below are fixed strings inside the installer, and the page shows both languages side by side:
+
+```text
+youtubetv-for-windows 已安裝 / Already installed
+```
+
+- **重新安裝（保留你的設定與登入狀態）**
+  Reinstall (keep your settings and sign-in)
+  Data result: your settings and sign-in state stay exactly as they are, and only the program files change to the new version. This is the default option.
+- **解除安裝並刪除所有資料**
+  Uninstall and delete all data
+  Data result: the app itself and the whole `C:\ProgramData\youtubetv-for-windows` tree are deleted, including your settings and sign-in state. Installing it again later means signing in again.
+- **取消**
+  Cancel
+  Data result: nothing changes. Your settings, your sign-in state, and the installed app stay as they are, and the installer exits.
+
+The installer also counts the files left by an older single-account release as installed and shows the same page. Remove that old copy through Windows Settings (Apps); the uninstaller neither moves nor deletes the data it left in your user profile folder. See "Where your data lives".
 
 ### About the SmartScreen warning
 
@@ -212,28 +275,43 @@ Even then, YouTube may drop quality because of the account, the network, or the 
 
 ### When something goes wrong
 
-| Symptom                                | What to do                                                                                                                     |
-| -------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
-| "YouTube TV 無法載入 / failed to load" | Try "重試 (Retry)" first. If it keeps failing with a fine network, use "在瀏覽器中開啟 (Open in browser)" or "支援 (Support)". |
-| A profile-corruption notice            | The app starts with a temporary profile instead, and sign-in won't persist this time. Check disk permissions and restart.      |
+| Symptom                                | What to do                                                                                                                                                                         |
+| -------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| "YouTube TV 無法載入 / failed to load" | Try "重試 (Retry)" first. If it keeps failing with a fine network, use "在瀏覽器中開啟 (Open in browser)" or "支援 (Support)".                                                     |
+| A profile-corruption notice            | The app starts with a temporary profile instead, and sign-in won't persist this time. Check disk permissions and restart.                                                          |
+| UAC says no, or the install fails      | A standard account cannot write to `C:\Program Files`, so the install stops right there. Use an account that has administrator rights, or ask an administrator to install for you. |
 
 ### Getting a new version
 
 There is only one way to get a new version, and it's a manual download:
 
 1. Go to `https://github.com/danielrepublic/youtubetv-for-windows/releases/latest` and grab the newest `youtubetv-for-windows-<version>-x64.exe`.
-2. Run it. Reinstalling keeps your profile, so sign-in state survives.
+2. Run it. If the app is already installed, the installer asks whether to reinstall or uninstall first; see "Already installed: reinstall, uninstall, or cancel".
+
+As long as you pick "Reinstall", the whole `C:\ProgramData\youtubetv-for-windows` tree is left alone and your sign-in state survives.
 
 ### What uninstall removes
 
-- Remove the app through Windows Settings (Apps) or Control Panel.
-- Uninstall deletes the app plus all of its per-user data on your PC: sign-in state and browser profile (`%PROGRAMDATA%\youtubetv-for-windows\users\<key>\profile`), caches, and user data (`%PROGRAMDATA%\youtubetv-for-windows\users\<key>\userdata`). Once it's gone, you'll sign in from scratch.
+- Remove the app through Windows Settings (Apps) or Control Panel, or run the installer again and choose "Uninstall and delete all data". Both ways raise a UAC prompt: uninstalling needs administrator rights too.
+- Uninstall deletes two whole trees: the install directory `C:\Program Files\youtubetv-for-windows` (the app itself), and everything under the data root `C:\ProgramData\youtubetv-for-windows`, which is the settings and user data of every Windows user on this PC.
+- Your profile is at `%PROGRAMDATA%\youtubetv-for-windows\users\<key>\profile` (cookies, cache, sign-in state) and your user data at `%PROGRAMDATA%\youtubetv-for-windows\users\<key>\userdata`. Once deleted, they are gone: there is no rollback, and installing the app again means signing in from scratch.
+- The one exception is a version change. When the installer replaces an older version it runs the uninstaller with an instruction to keep the data, so that pass leaves your data alone. Only an uninstall you start yourself deletes the data.
 - Reinstalls keep the profile. Only uninstall wipes it.
 
 ### Where your data lives
 
+Your data lives under the machine-wide data root `C:\ProgramData\youtubetv-for-windows` (spelled `%PROGRAMDATA%\youtubetv-for-windows` in environment variables), with one directory per Windows user:
+
+- Your own directory: `%PROGRAMDATA%\youtubetv-for-windows\users\<key>`, where `<key>` is your Windows account name with illegal characters replaced.
 - Profile: `%PROGRAMDATA%\youtubetv-for-windows\users\<key>\profile` (cookies, cache, sign-in state).
-- The full statement is [`docs/privacy.md`](docs/privacy.md).
+- User data: `%PROGRAMDATA%\youtubetv-for-windows\users\<key>\userdata` (Electron's caches and settings).
+- Diagnostics (off by default): `%PROGRAMDATA%\youtubetv-for-windows\users\<key>\diagnostics`.
+
+Two reasons it sits there. Each Windows user gets their own subdirectory, so two people on one PC never share a sign-in state. And the data root is not inside your user profile folder, which makes it easier to handle as one tree when you change accounts or reinstall Windows. `C:\ProgramData` normally allows writes for administrators only, so the installer grants the local Users group access to that data root.
+
+The data root moved, and that is worth stating plainly. Earlier releases were a single-account install and kept their data in your user profile folder; the README of the time pointed at `%LOCALAPPDATA%\youtubetv-for-windows\profile`. Nothing copies that old data to the new location and nothing reads it there, so settings and sign-in state you had in the old place have to be set up and signed in again. The old files are yours to delete, and uninstalling does not touch them.
+
+The full statement is [`docs/privacy.md`](docs/privacy.md).
 
 ### Support
 
