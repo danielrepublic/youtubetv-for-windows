@@ -66,15 +66,16 @@ const ARCHITECTURE_BY_MACHINE = new Map([
 
 // Top-level files electron-builder unconditionally emits beside the
 // installer for an NSIS target, even with `--publish never`:
-//   - `<installer>.exe.blockmap` (differential-update blockmap; inert here —
-//     updates are delivered by the signed-manifest handoff, never by
-//     electron-updater, which is not a dependency),
-//   - `latest.yml` (electron-updater metadata pointing at the installer;
-//     equally inert without that module),
+//   - `<installer>.exe.blockmap` and `latest.yml` (differential-update and
+//     electron-updater metadata). This application has no update subsystem
+//     and electron-updater is not a dependency, so nothing consumes them;
+//     they are kept in the allowlist only because electron-builder emits
+//     them beside the installer.
 //   - `builder-debug.yml` / `builder-effective-config.yaml` (build records).
 // The allowlist is EXACT: any other top-level file fails closed by name, so
 // a ZIP, portable, second-architecture, or signed artifact can never slip
-// through, and task 8 uploads only explicitly named assets.
+// through, and the release workflow uploads only the explicitly named
+// installer.
 function allowedTopLevelFile(fileName, expectedInstaller) {
   return (
     fileName === expectedInstaller ||
@@ -209,7 +210,6 @@ function checkManifestContract(manifest) {
       ["createDesktopShortcut", true],
       ["createStartMenuShortcut", true],
       ["deleteAppDataOnUninstall", false],
-      ["runAfterFinish", true],
       ["warningsAsErrors", true],
     ]) {
       if (nsis[option] !== wanted) {
@@ -218,13 +218,25 @@ function checkManifestContract(manifest) {
         );
       }
     }
+    // `runAfterFinish` is kept true as a plain post-install UX choice, not an
+    // update-contract requirement: in the assisted installer it keeps the
+    // finish page's "run the app" affordance, and electron-builder launches
+    // the app as the invoking (non-elevated) user. The retired in-app update
+    // path relaunched the app itself, so no update behaviour depends on this
+    // option. The assertion stays so a config change cannot silently drop the
+    // launch-after-install affordance.
+    if (nsis.runAfterFinish !== true) {
+      failures.push(
+        `build.nsis.runAfterFinish must be true (post-install launch UX); found ${JSON.stringify(nsis.runAfterFinish)}`,
+      );
+    }
     const includeName =
       typeof nsis.include === "string"
         ? nsis.include.split("/").pop()?.split("\\").pop()
         : undefined;
     if (includeName !== "nsis.include") {
       failures.push(
-        `build.nsis.include must resolve to the committed nsis.include handoff protocol; found ${JSON.stringify(nsis.include)}`,
+        `build.nsis.include must resolve to the committed nsis.include installer/uninstaller script; found ${JSON.stringify(nsis.include)}`,
       );
     }
   }

@@ -1,20 +1,20 @@
 // Task-7 packaging contract suite.
 //
 // Pins the x64-only full-NSIS configuration in `package.json` and the
-// profile-removing uninstaller half of `build/nsis.include` through the
-// REAL exported predicates in `scripts/verify-artifacts.cjs` — the same
+// installer/uninstaller halves of `build/nsis.include` through the REAL
+// exported predicates in `scripts/verify-artifacts.cjs` — the same
 // predicates that gate the build — so a weakened config fails the unit
 // chain, not just the release.
 //
 // Covered:
 //   - exactly one `nsis`/`x64` Windows target, per-user install without UAC,
-//     the Start-menu shortcut, silent-handoff include wiring, and the
-//     versioned `<product>-<version>-x64.exe` installer convention;
+//     the Start-menu shortcut, committed include wiring, and the versioned
+//     `<product>-<version>-x64.exe` installer convention;
 //   - the uninstaller half removes the exact profile directory named by
 //     `src/main/profile-path.ts`, keeps it on the `/KEEP_APP_DATA` upgrade
 //     path, and fails bilingually (never silently) on a lock;
-//   - the todo-6 handoff half (`customInit`/`customInstall` with the
-//     BUILD_UNINSTALLER guard) is still intact.
+//   - the installer half keeps the per-user enforcement hooks and contains
+//     none of the retired update-handoff protocol.
 
 import assert from "node:assert/strict";
 import fs from "node:fs";
@@ -204,14 +204,30 @@ test("a locked profile fails bilingually instead of silently", () => {
   assert.match(uninstallHalf, /Abort/);
 });
 
-test("the todo-6 handoff half is preserved", () => {
+test("the retired update-handoff protocol is absent and both halves survive", () => {
   const source = fs.readFileSync(includePath, "utf8");
+  for (const retired of [
+    "YTVW_VALIDATE_NONCE",
+    "YTVW_PARSE_HANDOFF",
+    "YTVW_WAIT_FOR_PARENT",
+    "YTVW_WRITE_SUCCESS_MARKER",
+    "YTVW_RELAUNCH_APP",
+    "YTVW_STATUS_DIR",
+    "--update-parent-pid",
+    "--update-nonce",
+    "success-",
+    "ytvwHandoffMode",
+  ]) {
+    assert.ok(
+      !source.includes(retired),
+      `the retired handoff symbol "${retired}" must not survive in nsis.include`,
+    );
+  }
   assert.match(source, /!macro customInit/);
-  assert.match(source, /!macro customInstall/);
+  assert.match(source, /!macro customUnInstall/);
+  assert.match(source, /YTVW_REMOVE_DATA_DIRECTORY/);
   assert.match(source, /!ifndef BUILD_UNINSTALLER/);
-  assert.match(source, /YTVW_WAIT_FOR_PARENT/);
-  assert.match(source, /YTVW_WRITE_SUCCESS_MARKER/);
-  assert.match(source, /YTVW_RELAUNCH_APP/);
+  assert.match(source, /!ifdef BUILD_UNINSTALLER/);
 });
 
 test("the include is UTF-8 with BOM so makensis reads the Chinese text", () => {
