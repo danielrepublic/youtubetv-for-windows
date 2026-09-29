@@ -1,0 +1,121 @@
+name: Publish signed release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions: {}
+
+concurrency:
+  group: release-${{ github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    if: >-
+      github.event_name == 'push' && github.ref_type == 'tag' &&
+      github.ref_protected && startsWith(github.ref, 'refs/tags/v')
+    runs-on: windows-latest
+    environment:
+      name: release
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout the protected tag
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: 24.19.0
+          cache: npm
+
+      - name: Validate the protected stable version tag
+        shell: pwsh
+        run: |
+          $tag = $env:GITHUB_REF_NAME
+          $version = (Get-Content package.json -Raw | ConvertFrom-Json).version
+          if ($tag -notmatch '^v(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)$') {
+            throw "Refusing non-stable release tag: $tag"
+          }
+          if ($tag -ne "v$version") {
+            throw "Release tag $tag does not match package version $version"
+          }
+
+      - name: Install, test, and package
+        shell: pwsh
+        run: |
+          npm ci
+          npm run typecheck
+          npm run test:unit
+          npm run lint
+          npm run format:check
+          npm run package
+          npm run verify:artifacts
+
+      - name: Refuse to overwrite an existing release version
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view $env:GITHUB_REF_NAME --repo $env:GITHUB_REPOSITORY *> $null
+          if ($LASTEXITCODE -eq 0) {
+            throw "Refusing to overwrite existing release $env:GITHUB_REF_NAME"
+          }
+
+      - name: Sign the exact upload asset set
+        shell: pwsh
+        env:
+          RELEASE_ED25519_PRIVATE_KEY: ${{ secrets.RELEASE_ED25519_PRIVATE_KEY }}
+        run: |
+          $version = (Get-Content package.json -Raw | ConvertFrom-Json).version
+          $installer = "youtubetv-for-windows-$version-x64.exe"
+          New-Item -ItemType Directory -Force release-assets | Out-Null
+          Copy-Item "release-output/$installer" "release-assets/$installer"
+          node scripts/generate-release-manifest.mjs --installer "release-assets/$installer" --release-directory release-assets --version $version --release-tag $env:GITHUB_REF_NAME --key-id ytvw-release-primary --min-bootstrap-version 0.1.0 --min-app-version 0.1.0 --verify
+
+      - name: Write bilingual release notes
+        shell: pwsh
+        run: |
+          @'
+          ## 繁體中文
+
+          此版本提供已驗證的 x64 Windows 安裝檔與更新資訊。請下載 `youtubetv-for-windows-<version>-x64.exe`；`update-manifest.json`、`update-manifest.sig` 和 `.sha256` 檔案供程式驗證更新使用。
+
+          此程式不是 YouTube 或 Google 的官方產品。安裝檔未經程式碼簽署，Windows SmartScreen 可能顯示警告。自動更新交給安裝程式後沒有自動回復；若失敗，請從此發佈頁手動重新下載。
+
+          ## English
+
+          This release provides a verified x64 Windows installer and update metadata. Download the versioned installer; `update-manifest.json`, `update-manifest.sig`, and `update-manifest.sha256` are for in-app update verification.
+
+          This is not an official YouTube or Google product. The installer is not code-signed, so Windows SmartScreen may warn. There is no automatic rollback after an update hands off to the installer; if it fails, download the installer again from this release page.
+          '@ | Set-Content -Encoding utf8 "$env:RUNNER_TEMP/release-notes.md"
+
+      # No secret is exposed here on purpose: this step only reads public
+      # keyring material and re-proves that the staged bytes still match the
+      # signature, so an asset altered after signing can never be published.
+      - name: Re-verify the staged assets immediately before upload
+        shell: pwsh
+        run: |
+          $version = (Get-Content package.json -Raw | ConvertFrom-Json).version
+          node scripts/generate-release-manifest.mjs --verify-only --release-directory release-assets --version $version --release-tag $env:GITHUB_REF_NAME --key-id ytvw-release-primary
+
+      - name: Publish immutable GitHub Release assets
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $version = (Get-Content package.json -Raw | ConvertFrom-Json).version
+          $installer = "youtubetv-for-windows-$version-x64.exe"
+          gh release create $env:GITHUB_REF_NAME "release-assets/$installer" release-assets/update-manifest.json release-assets/update-manifest.sig release-assets/update-manifest.sha256 --repo $env:GITHUB_REPOSITORY --title $env:GITHUB_REF_NAME --notes-file "$env:RUNNER_TEMP/release-notes.md" --verify-tag
+
+      - name: Retain the exact published asset set
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: signed-release-${{ github.ref_name }}
+          path: release-assets
+          if-no-files-found: error
+          retention-days: 14
