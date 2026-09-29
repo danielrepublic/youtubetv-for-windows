@@ -9,13 +9,29 @@
 //     / mac*, so a denylist of guessed names is a silent no-op; an exact-set
 //     assertion is the only shape that cannot be fooled by a name never seen
 //     before.
-//   * The reported architecture/platform are read from the PE header of the
-//     produced executable (DOS e_lfanew at 0x3C -> `PE\0\0` -> Machine u16 at
-//     signature+4 must be 0x8664 AMD64 -> OptionalHeader.Magic u16 at
-//     signature+24 must be 0x20b PE32+ -> Subsystem u16 at signature+92 must
-//     be 2 Windows GUI). Nothing is a string literal.
-//   * "Exactly one application executable" is a predicate: every recursive
-//     `.exe` path under release-output/ must equal the single expected path.
+//   * Exactly one top-level installer `.exe` must exist and its name must
+//     equal the versioned convention
+//     `<productName>-<version>-x64.exe`, which is also what the configured
+//     `build.nsis.artifactName` template must render to. The only other
+//     permitted top-level files are electron-builder's own pinned
+//     byproducts (`<installer>.exe.blockmap`, `latest.yml`,
+//     `builder-debug.yml`, `builder-effective-config.yaml`); anything else
+//     fails closed by name.
+//   * The application executable is `win-unpacked/<productName>.exe`; every
+//     recursive `.exe` under `release-output/` must be either that file or
+//     the top-level installer (an `elevate.exe` helper or any stray binary
+//     fails). The reported architecture/platform are read from the PE header
+//     of the produced application executable (DOS e_lfanew at 0x3C ->
+//     `PE\0\0` -> Machine u16 at signature+4 must be 0x8664 AMD64 ->
+//     OptionalHeader.Magic u16 at signature+24 must be 0x20b PE32+ ->
+//     Subsystem u16 at signature+92 must be 2 Windows GUI). Nothing is a
+//     string literal. The installer stub itself is name/count-checked only:
+//     NSIS installer stubs are not x64 images, so a PE arch assertion on
+//     them would false-fail.
+//   * The manifest packaging contract (`build.win` / `build.nsis` / the
+//     `package` script) is asserted by `checkManifestContract` and exported
+//     for the unit suite, so the same predicate gates the build and the
+//     tests with no duplicated logic.
 //   * WebView2 detection walks every path SEGMENT (files and directories)
 //     relative to release-output/, so a runtime laid down as a directory with
 //     innocuous filenames is caught, while a checkout path that merely
@@ -31,6 +47,7 @@ const MANIFEST_PATH = path.join(REPOSITORY_ROOT, "package.json");
 
 const EXPECTED_PACKAGED_DIRECTORY = "win-unpacked";
 const EXPECTED_APPLICATION_SUFFIX = ".exe";
+const EXPECTED_INSTALLER_ARCH_LABEL = "x64";
 
 const PE_SIGNATURE = 0x00004550; // "PE\0\0"
 const PE_MACHINE_AMD64 = 0x8664;
@@ -46,6 +63,27 @@ const ARCHITECTURE_BY_MACHINE = new Map([
   [PE_MACHINE_IA32, "ia32"],
   [PE_MACHINE_ARM64, "arm64"],
 ]);
+
+// Top-level files electron-builder unconditionally emits beside the
+// installer for an NSIS target, even with `--publish never`:
+//   - `<installer>.exe.blockmap` (differential-update blockmap; inert here —
+//     updates are delivered by the signed-manifest handoff, never by
+//     electron-updater, which is not a dependency),
+//   - `latest.yml` (electron-updater metadata pointing at the installer;
+//     equally inert without that module),
+//   - `builder-debug.yml` / `builder-effective-config.yaml` (build records).
+// The allowlist is EXACT: any other top-level file fails closed by name, so
+// a ZIP, portable, second-architecture, or signed artifact can never slip
+// through, and task 8 uploads only explicitly named assets.
+function allowedTopLevelFile(fileName, expectedInstaller) {
+  return (
+    fileName === expectedInstaller ||
+    fileName === `${expectedInstaller}.blockmap` ||
+    fileName === "latest.yml" ||
+    fileName === "builder-debug.yml" ||
+    fileName === "builder-effective-config.yaml"
+  );
+}
 
 const FORBIDDEN_SIGNING_MATERIAL_EXTENSIONS = new Set([
   ".pfx",
@@ -75,6 +113,143 @@ function readManifest() {
   } catch {
     return undefined;
   }
+}
+
+function productNameOf(manifest) {
+  return typeof manifest.build?.productName === "string" &&
+    manifest.build.productName.length > 0
+    ? manifest.build.productName
+    : manifest.name;
+}
+
+// The single versioned installer asset convention, owed to the release
+// workflow: `<productName>-<version>-x64.exe`.
+function expectedInstallerName(manifest) {
+  return `${productNameOf(manifest)}-${manifest.version}-${EXPECTED_INSTALLER_ARCH_LABEL}.exe`;
+}
+
+// Renders the configured `build.nsis.artifactName` template against the
+// manifest. Returns undefined when the template carries a macro this
+// verifier does not bind (fail closed: an unrenderable name can never be
+// proven to match the convention).
+function renderArtifactName(template, manifest) {
+  if (typeof template !== "string" || template.length === 0) {
+    return undefined;
+  }
+  // The `${...}` macro spellings are assembled, never written as string
+  // literals: the Biome language server flags a literal "${" inside a plain
+  // string as a probable template mistake.
+  const open = "$" + "{";
+  const rendered = template
+    .split(`${open}productName}`)
+    .join(productNameOf(manifest))
+    .split(`${open}version}`)
+    .join(String(manifest.version))
+    .split(`${open}arch}`)
+    .join(EXPECTED_INSTALLER_ARCH_LABEL)
+    .split(`${open}ext}`)
+    .join("exe");
+  if (/\$\{[^}]+\}/.test(rendered)) {
+    return undefined;
+  }
+  return rendered;
+}
+
+// Asserts the packaging configuration that produces exactly one unsigned
+// x64 per-user NSIS installer. Returns a list of failure strings (empty
+// when the contract holds). This is the same predicate the unit suite
+// exercises against mutated manifests, so a weakened config fails both.
+function checkManifestContract(manifest) {
+  const failures = [];
+  if (manifest === undefined || manifest === null) {
+    return ["cannot read package.json"];
+  }
+  if (manifest.build === undefined || manifest.build === null) {
+    return ["package.json is missing build configuration"];
+  }
+
+  const targets = manifest.build.win?.target ?? [];
+  if (
+    targets.length !== 1 ||
+    targets[0]?.target !== "nsis" ||
+    targets[0]?.arch === undefined ||
+    targets[0].arch.length !== 1 ||
+    targets[0].arch[0] !== "x64"
+  ) {
+    failures.push(
+      `build.win.target must be exactly [{target:"nsis",arch:["x64"]}]; found ${JSON.stringify(targets)}`,
+    );
+  }
+  if (manifest.build.win?.requestedExecutionLevel !== "asInvoker") {
+    failures.push(
+      "build.win.requestedExecutionLevel must be asInvoker (a standard per-user install needs no UAC)",
+    );
+  }
+
+  const nsis = manifest.build.nsis;
+  if (nsis === undefined || nsis === null) {
+    failures.push("package.json is missing build.nsis configuration");
+  } else {
+    const expected = expectedInstallerName(manifest);
+    const rendered = renderArtifactName(nsis.artifactName, manifest);
+    if (rendered === undefined) {
+      failures.push(
+        `build.nsis.artifactName must be a renderable template; found ${JSON.stringify(nsis.artifactName)}`,
+      );
+    } else if (rendered !== expected) {
+      failures.push(
+        `build.nsis.artifactName must render to the versioned convention "${expected}"; renders to "${rendered}"`,
+      );
+    }
+    for (const [option, wanted] of [
+      ["oneClick", false],
+      ["perMachine", false],
+      ["allowElevation", false],
+      ["packElevateHelper", false],
+      ["createDesktopShortcut", true],
+      ["createStartMenuShortcut", true],
+      ["deleteAppDataOnUninstall", false],
+      ["runAfterFinish", true],
+      ["warningsAsErrors", true],
+    ]) {
+      if (nsis[option] !== wanted) {
+        failures.push(
+          `build.nsis.${option} must be ${JSON.stringify(wanted)}; found ${JSON.stringify(nsis[option])}`,
+        );
+      }
+    }
+    const includeName =
+      typeof nsis.include === "string"
+        ? nsis.include.split("/").pop()?.split("\\").pop()
+        : undefined;
+    if (includeName !== "nsis.include") {
+      failures.push(
+        `build.nsis.include must resolve to the committed nsis.include handoff protocol; found ${JSON.stringify(nsis.include)}`,
+      );
+    }
+  }
+
+  const packageScript = manifest.scripts?.package;
+  if (typeof packageScript !== "string") {
+    failures.push("package.json is missing the package script");
+  } else {
+    for (const required of ["electron-builder", "--win", "--x64"]) {
+      if (!packageScript.includes(required)) {
+        failures.push(`the package script must contain "${required}"`);
+      }
+    }
+    // --dir would emit only the unpacked directory and skip the installer;
+    // every other token would emit a forbidden artifact or architecture.
+    const forbidden =
+      /--dir|--ia32|--arm64|portable|\bzip\b|\bmsi\b|\bmsix\b|\bappx\b/i;
+    const hit = forbidden.exec(packageScript);
+    if (hit !== null) {
+      failures.push(
+        `the package script must not contain "${hit[0]}" (exactly one unsigned x64 NSIS installer is emitted)`,
+      );
+    }
+  }
+  return failures;
 }
 
 function readAt(handle, position, length) {
@@ -136,6 +311,9 @@ function main() {
     failures.push(`cannot read ${MANIFEST_PATH}`);
     return report(failures);
   }
+  for (const failure of checkManifestContract(manifest)) {
+    failures.push(failure);
+  }
   const outputName = manifest.build?.directories?.output;
   if (typeof outputName !== "string" || outputName.length === 0) {
     failures.push("package.json is missing build.directories.output");
@@ -179,16 +357,36 @@ function main() {
   const entries = collectEntries(outputDirectory);
   const fileEntries = entries.filter((entry) => !entry.isDirectory);
 
-  const productName =
-    typeof manifest.build?.productName === "string" &&
-    manifest.build.productName.length > 0
-      ? manifest.build.productName
-      : manifest.name;
+  const productName = productNameOf(manifest);
   const expectedExecutablePath = path.join(
     outputDirectory,
     EXPECTED_PACKAGED_DIRECTORY,
     `${productName}${EXPECTED_APPLICATION_SUFFIX}`,
   );
+  const expectedInstallerNameValue = expectedInstallerName(manifest);
+  const expectedInstallerPath = path.join(
+    outputDirectory,
+    expectedInstallerNameValue,
+  );
+
+  const topLevelFiles = topLevelEntries
+    .filter((entry) => entry.isFile())
+    .map((entry) => entry.name)
+    .sort();
+  for (const fileName of topLevelFiles) {
+    if (!allowedTopLevelFile(fileName, expectedInstallerNameValue)) {
+      failures.push(
+        `${relativeOutput}/${fileName} is not the expected versioned installer "${expectedInstallerNameValue}" or a pinned builder byproduct`,
+      );
+    }
+  }
+  if (!topLevelFiles.includes(expectedInstallerNameValue)) {
+    failures.push(
+      `${relativeOutput}/ is missing the versioned installer "${expectedInstallerNameValue}"`,
+    );
+    return report(failures);
+  }
+
   const executablePaths = fileEntries
     .map((entry) => entry.fullPath)
     .filter(
@@ -199,9 +397,31 @@ function main() {
     outputDirectory,
     expectedExecutablePath,
   );
+  const expectedInstallerRelative = relativeToOutput(
+    outputDirectory,
+    expectedInstallerPath,
+  );
+  const allowedExecutables = new Set([
+    path.resolve(expectedExecutablePath),
+    path.resolve(expectedInstallerPath),
+  ]);
+  const unexpectedExecutables = executablePaths.filter(
+    (filePath) => !allowedExecutables.has(path.resolve(filePath)),
+  );
+  if (unexpectedExecutables.length > 0) {
+    failures.push(
+      `unexpected executable(s) under ${relativeOutput}/: ` +
+        unexpectedExecutables
+          .map((filePath) => relativeToOutput(outputDirectory, filePath))
+          .join(", "),
+    );
+  }
+  const resolvedExecutables = new Set(
+    executablePaths.map((filePath) => path.resolve(filePath)),
+  );
   if (
-    executablePaths.length !== 1 ||
-    path.resolve(executablePaths[0]) !== path.resolve(expectedExecutablePath)
+    !resolvedExecutables.has(path.resolve(expectedExecutablePath)) ||
+    resolvedExecutables.size !== 2
   ) {
     const found = executablePaths.map((filePath) =>
       relativeToOutput(outputDirectory, filePath),
@@ -291,6 +511,7 @@ function main() {
     outputDirectory: relativeOutput,
     packagedDirectory: `${relativeOutput}/${EXPECTED_PACKAGED_DIRECTORY}`,
     applicationExecutable: expectedExecutableRelative,
+    installer: expectedInstallerRelative,
     architecture: architecture ?? "unknown",
     platform,
     pe: {
@@ -307,7 +528,7 @@ function main() {
     forbiddenArchiveFormats: [],
   };
   process.stdout.write(
-    `[verify:artifacts] PASS ${expectedExecutableRelative} is a Windows ${record.architecture} PE32+ GUI image\n`,
+    `[verify:artifacts] PASS ${expectedExecutableRelative} is a Windows ${record.architecture} PE32+ GUI image, installer ${expectedInstallerRelative}\n`,
   );
   process.stdout.write(`${JSON.stringify(record, null, 2)}\n`);
   return 0;
@@ -321,11 +542,20 @@ function report(failures) {
   return 1;
 }
 
-try {
-  process.exitCode = main();
-} catch (error) {
-  process.stderr.write(
-    `[verify:artifacts] FAIL unexpected error: ${error instanceof Error ? error.message : String(error)}\n`,
-  );
-  process.exitCode = 1;
+module.exports = {
+  expectedInstallerName,
+  renderArtifactName,
+  checkManifestContract,
+  productNameOf,
+};
+
+if (require.main === module) {
+  try {
+    process.exitCode = main();
+  } catch (error) {
+    process.stderr.write(
+      `[verify:artifacts] FAIL unexpected error: ${error instanceof Error ? error.message : String(error)}\n`,
+    );
+    process.exitCode = 1;
+  }
 }

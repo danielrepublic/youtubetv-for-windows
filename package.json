@@ -32,7 +32,7 @@
     "test:unit": "node scripts/run-tests.cjs unit",
     "pretest:electron": "npm run build",
     "test:electron": "node scripts/run-tests.cjs electron",
-    "package": "npm run build && electron-builder --win --x64 --dir --publish never",
+    "package": "npm run build && electron-builder --win --x64 --publish never",
     "verify:artifacts": "node scripts/verify-artifacts.cjs",
     "verify:static": "npm run preflight && npm run lint && npm run format:check && npm run typecheck && npm run test:unit",
     "verify:windows": "npm run test:electron && npm run package && npm run verify:artifacts",
@@ -66,12 +66,26 @@
     "win": {
       "target": [
         {
-          "target": "dir",
+          "target": "nsis",
           "arch": [
             "x64"
           ]
         }
-      ]
+      ],
+      "requestedExecutionLevel": "asInvoker"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowElevation": false,
+      "packElevateHelper": false,
+      "artifactName": "${productName}-${version}-x64.${ext}",
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "deleteAppDataOnUninstall": false,
+      "runAfterFinish": true,
+      "warningsAsErrors": true,
+      "include": "nsis.include"
     }
   }
 }

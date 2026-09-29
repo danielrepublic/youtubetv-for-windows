@@ -235,7 +235,11 @@ test("packaging targets Windows x64 only, with no portable or non-x64 output", (
   );
   assert.match(manifest.scripts.package, /--win/);
   assert.match(manifest.scripts.package, /--x64/);
-  assert.match(manifest.scripts.package, /--dir/);
+  assert.doesNotMatch(
+    manifest.scripts.package,
+    /--dir/,
+    "the --dir flag emits only the unpacked directory and skips the NSIS installer",
+  );
 });
 
 test("the Electron upgrade policy is documented alongside the pinned version", () => {

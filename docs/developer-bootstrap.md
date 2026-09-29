@@ -29,22 +29,22 @@ per command under `release-evidence/`.
 
 ## Commands
 
-| Command                                   | What it does                                                                                                         |
-| ----------------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
-| `npm run preflight`                       | Fail-closed toolchain check: Node.js, npm, platform, and architecture against `package.json`.                        |
-| `npm run clean`                           | Removes `dist/` and `release-output/`.                                                                               |
-| `npm run clean-install`                   | `npm run clean && npm run preflight && npm ci` — the reproducible cold install.                                      |
-| `npm run build`                           | Emits the ESM main tree (`dist/main/`), the CommonJS preload (`dist/preload/`), and the CJS marker.                  |
-| `npm run lint`                            | ESLint flat config over the repository.                                                                              |
-| `npm run format` / `npm run format:check` | Prettier write / verify.                                                                                             |
-| `npm run typecheck`                       | `tsc --noEmit` for both the main and the preload configs.                                                            |
-| `npm test` / `npm run test:unit`          | Headless unit chain (`test/**/*.test.mjs` outside `test/electron/`).                                                 |
-| `npm run test:electron`                   | Desktop chain (`test/electron/**/*.test.mjs`), needs the installed Electron binary.                                  |
-| `npm run package`                         | `npm run build` then `electron-builder --win --x64 --dir --publish never`, producing `release-output/win-unpacked/`. |
-| `npm run verify:artifacts`                | Verifies the packaged artifact is exactly one Windows x64 executable (see below).                                    |
-| `npm run verify:static`                   | `preflight` + `lint` + `format:check` + `typecheck` + `test:unit`.                                                   |
-| `npm run verify:windows`                  | `test:electron` + `package` + `verify:artifacts`.                                                                    |
-| `npm run verify`                          | `verify:static` then `verify:windows`.                                                                               |
+| Command                                   | What it does                                                                                                                                                                 |
+| ----------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `npm run preflight`                       | Fail-closed toolchain check: Node.js, npm, platform, and architecture against `package.json`.                                                                                |
+| `npm run clean`                           | Removes `dist/` and `release-output/`.                                                                                                                                       |
+| `npm run clean-install`                   | `npm run clean && npm run preflight && npm ci` — the reproducible cold install.                                                                                              |
+| `npm run build`                           | Emits the ESM main tree (`dist/main/`), the CommonJS preload (`dist/preload/`), and the CJS marker.                                                                          |
+| `npm run lint`                            | ESLint flat config over the repository.                                                                                                                                      |
+| `npm run format` / `npm run format:check` | Prettier write / verify.                                                                                                                                                     |
+| `npm run typecheck`                       | `tsc --noEmit` for both the main and the preload configs.                                                                                                                    |
+| `npm test` / `npm run test:unit`          | Headless unit chain (`test/**/*.test.mjs` outside `test/electron/`).                                                                                                         |
+| `npm run test:electron`                   | Desktop chain (`test/electron/**/*.test.mjs`), needs the installed Electron binary.                                                                                          |
+| `npm run package`                         | `npm run build` then `electron-builder --win --x64 --publish never`, producing `release-output/youtubetv-for-windows-<version>-x64.exe` plus `release-output/win-unpacked/`. |
+| `npm run verify:artifacts`                | Verifies the versioned x64 installer and exactly one Windows x64 application executable (see below).                                                                         |
+| `npm run verify:static`                   | `preflight` + `lint` + `format:check` + `typecheck` + `test:unit`.                                                                                                           |
+| `npm run verify:windows`                  | `test:electron` + `package` + `verify:artifacts`.                                                                                                                            |
+| `npm run verify`                          | `verify:static` then `verify:windows`.                                                                                                                                       |
 
 ### Why `verify:static` and `verify:windows` are split
 
@@ -148,8 +148,16 @@ from the produced files:
   `{win-unpacked}` — an exact-set assertion, never a denylist of guessed names,
   because electron-builder also emits `win-ia32-unpacked`,
   `win-arm64-unpacked`, and `linux-*`/`mac*` siblings;
-- all recursive `.exe` files under `release-output/` must reduce to exactly the
-  one expected application executable;
+- all recursive `.exe` files under `release-output/` must reduce to exactly
+  the versioned top-level installer plus the one expected application
+  executable (`win-unpacked/<productName>.exe`) — an `elevate.exe` helper or
+  any stray binary fails;
+- exactly one top-level installer must exist and its name must equal the
+  versioned convention `<productName>-<version>-x64.exe`, which is also what
+  the configured `build.nsis.artifactName` template must render to. The only
+  other permitted top-level files are electron-builder's pinned byproducts
+  (`<installer>.exe.blockmap`, `latest.yml`, `builder-debug.yml`,
+  `builder-effective-config.yaml`); anything else fails closed by name;
 - the PE header is parsed for real: `e_lfanew` at `0x3C`, `PE\0\0` signature,
   `Machine == 0x8664` (AMD64), `OptionalHeader.Magic == 0x20b` (PE32+), and a
   Windows GUI/console subsystem. The reported `architecture`/`platform` come
@@ -160,9 +168,12 @@ from the produced files:
   (`.zip .7z .msi .msix .msixbundle .appx .appxbundle`) are rejected by
   extension.
 
-`npm run package` currently builds the unpacked `dir` target only; todo 7
-upgrades it to an NSIS installer and must update this verifier at the same
-time.
+`npm run package` builds the full per-user x64 NSIS installer (assisted UI,
+per-user install root without UAC, Start-menu shortcut, committed
+`build/nsis.include` for the update handoff and the profile-removing
+uninstaller). The installer stub itself is name/count-checked only — NSIS
+stubs are not x64 images, so the PE arch guard applies to the application
+executable.
 
 ## Evidence
 

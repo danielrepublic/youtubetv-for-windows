@@ -1,4 +1,4 @@
-; ===========================================================================
+﻿; ===========================================================================
 ; youtubetv-for-windows - launcher handoff include (todo 6)
 ; ===========================================================================
 ;
@@ -58,8 +58,11 @@
 ;      quotes every field (`"node.exe","44184","Console",...`), so the
 ;      search string must include the quotes AND the comma delimiters; the
 ;      backslash-escaped quotes survive cmd.exe's quote stripping and reach
-;      findstr literally. findstr exits 0 on a match and 1 on no match, and
-;      only that exit code is used. While the parent lives, NO
+;      findstr literally. The wait is FAIL CLOSED: ONLY findstr's exact
+;      no-match exit code (1) concludes the parent is gone. A match (0), a
+;      findstr failure (2 or higher) and an nsExec launch failure (which
+;      pushes a non-numeric error STRING instead of a code) all keep
+;      polling until the deadline. While the parent lives, NO
 ;      uninstall/copy/replace action runs.
 ;   On deadline expiry the installer ABORTS (exit code 3, `Quit` before any
 ;   section runs) and replaces nothing. Rationale: replacing files that a
@@ -104,6 +107,40 @@
 ; electron-builder treats as an ERROR. The whole include is therefore skipped
 ; in the uninstaller build.
 ; ===========================================================================
+;
+; ---------------------------------------------------------------------------
+; PER-USER-ONLY ENFORCEMENT (todo 7)
+; ---------------------------------------------------------------------------
+;
+; Evaluated against the REAL defines electron-builder passes to makensis on
+; the command line, in BOTH the installer and the uninstaller compiles. Any
+; one of them being set aborts the BUILD with an error, so a
+; per-machine-capable or elevating configuration can never produce an
+; installer silently:
+;
+;   INSTALL_MODE_PER_ALL_USERS       - set only when `perMachine: true`.
+;   MULTIUSER_INSTALLMODE_ALLOW_ELEVATION
+;                                    - set unless `nsis.allowElevation` is
+;                                      false; without it the assisted mode
+;                                      page disables the "all users" radio
+;                                      for non-admin callers.
+;   ONE_CLICK                        - the one-click flow has no install-mode
+;                                      page at all; this deliverable is the
+;                                      assisted UI.
+;
+; NOTE: INSTALL_MODE_PER_ALL_USERS_REQUIRED is deliberately NOT guarded: it
+; is defined for every assisted build and only declares the per-machine
+; code path, never selects it.
+; ---------------------------------------------------------------------------
+!ifdef INSTALL_MODE_PER_ALL_USERS
+  !error "youtubetv-for-windows forbids per-machine installs: perMachine must be false"
+!endif
+!ifdef MULTIUSER_INSTALLMODE_ALLOW_ELEVATION
+  !error "youtubetv-for-windows forbids elevation: nsis.allowElevation must be false"
+!endif
+!ifdef ONE_CLICK
+  !error "youtubetv-for-windows requires the assisted installer: nsis.oneClick must be false"
+!endif
 
 !ifndef BUILD_UNINSTALLER
 
@@ -121,6 +158,18 @@
 !ifndef YTVW_PARENT_POLL_INTERVAL_MS
   !define YTVW_PARENT_POLL_INTERVAL_MS 250
 !endif
+; Compile-time-only test seam, in the same `!ifndef YTVW_*` style as the
+; timeout and poll-interval defaults above. It exists so a harness can force
+; a FAILING liveness probe without staging a real process race. It cannot
+; affect a shipped build: electron-builder never passes -D
+; YTVW_PARENT_PROBE_COMMAND, the default below is the command that used to be
+; written inline in YTVW_WAIT_FOR_PARENT byte for byte, and there is no
+; runtime argument, environment variable, file or registry value that can
+; change it. `test/update-startup/nsis-include-runtime.test.mjs` pins that
+; byte-identity against the historical literal.
+!ifndef YTVW_PARENT_PROBE_COMMAND
+  !define YTVW_PARENT_PROBE_COMMAND `"$SYSDIR\cmd.exe" /C tasklist /FI "PID eq ${pid}" /FO CSV /NH | "$SYSDIR\findstr.exe" /C:,\"${pid}\",`
+!endif
 
 !ifndef YTVW_STATUS_DIR
   !define YTVW_STATUS_DIR "$LOCALAPPDATA\youtubetv-for-windows\update-status"
@@ -133,6 +182,8 @@ Var ytvwNonce
 Var ytvwWaitElapsed
 Var ytvwWaitResult
 Var ytvwTasklistCode
+Var ytvwProbeNumeric
+Var ytvwProbeOutcome
 Var ytvwNonceIndex
 Var ytvwNonceChar
 Var ytvwNonceValid
@@ -235,15 +286,57 @@ Var ytvwMarkerWritten
 ;   Polls `tasklist` filtered to the exact PID and matches the CSV field
 ;   `,"<pid>",` with findstr (the CSV quotes are part of the field, so the
 ;   pattern must carry them; `\"` survives cmd.exe as a literal quote).
-;   findstr's exit code (0 = match, 1 = no match) is the only signal used.
+;
+;   FAIL-CLOSED PROBE CONTRACT. Every poll is classified into exactly one of
+;   three states, and only the second may end the wait:
+;
+;     probe result          state    effect
+;     --------------------  -------  ---------------------------------
+;     exit 0                alive    keep polling
+;     exit 1                gone     resultVar = "0", stop waiting
+;     exit 2 or higher      failed   keep polling
+;     non-numeric value     failed   keep polling
+;
+;   "failed" covers a probe that could not be trusted: findstr itself
+;   failed, or nsExec could not launch the probe at all and pushed a
+;   non-numeric error string such as "error" instead of an exit code.
+;
+;   "failed" is deliberately NOT terminal and does NOT abort on its own: one
+;   transient probe failure must not turn into a failed update. It only keeps
+;   the wait bounded, so when the deadline expires resultVar is still "1" and
+;   customInit takes its existing fail-closed abort (exit 3) before any
+;   uninstall/copy action.
+;
+;   Why the non-numeric row needs its own test: the retired implementation
+;   compared the raw value with `!= 0`, so a non-numeric string silently read
+;   as "not equal to zero", i.e. as ABSENCE, and a probe that never ran was
+;   read as a parent that had already exited. `IntOp` canonicalises a decimal
+;   string and yields "0" for anything it cannot parse, so a probe value
+;   round-trips through it only when it really is a number; that is the test
+;   used here to route non-numeric values to `failed`.
 ; ---------------------------------------------------------------------------
 !macro YTVW_WAIT_FOR_PARENT pid timeoutMs resultVar
   StrCpy ${resultVar} "1"
   StrCpy $ytvwWaitElapsed 0
   ${Do}
-    nsExec::Exec '"$SYSDIR\cmd.exe" /C tasklist /FI "PID eq ${pid}" /FO CSV /NH | "$SYSDIR\findstr.exe" /C:,\"${pid}\",'
+    nsExec::Exec '${YTVW_PARENT_PROBE_COMMAND}'
     Pop $ytvwTasklistCode
-    ${If} $ytvwTasklistCode != 0
+    ; Default to the fail-closed state, so any value this block does not
+    ; positively recognise as exit 0 or exit 1 can never conclude absence.
+    StrCpy $ytvwProbeOutcome "failed"
+    StrCpy $ytvwProbeNumeric ""
+    IntOp $ytvwProbeNumeric $ytvwTasklistCode + 0
+    ClearErrors
+    ${If} $ytvwProbeNumeric == $ytvwTasklistCode
+      ${If} $ytvwProbeNumeric == "0"
+        StrCpy $ytvwProbeOutcome "alive"
+      ${ElseIf} $ytvwProbeNumeric == "1"
+        StrCpy $ytvwProbeOutcome "gone"
+      ${EndIf}
+    ${EndIf}
+    ; "alive" and "failed" fall through to the bounded retry below; only the
+    ; exact no-match result ends the wait.
+    ${If} $ytvwProbeOutcome == "gone"
       StrCpy ${resultVar} "0"
       ${Break}
     ${EndIf}
@@ -304,10 +397,45 @@ Var ytvwMarkerWritten
 !macroend
 
 ; ---------------------------------------------------------------------------
+; customInstallMode (assisted installer only)
+;   Called by the template's install-mode page function
+;   (multiUserUi.nsh: `!ifmacrodef customInstallmode`) before the page is
+;   shown. Forcing $isForceCurrentInstall makes the page select the
+;   per-user mode and skip itself entirely, so an interactive install can
+;   never choose all-users. (Macro names are case-insensitive in NSIS, so
+;   this definition satisfies the lowercase check; proven by probe.)
+;   $isForceCurrentInstall is declared by the template's multiUserUi.nsh;
+;   this macro is only ever inserted there (or by the install-mode test,
+;   which declares the same Var), so no guard is needed.
+;   Silent installs never show the page; they are covered by the customInit
+;   forcing below.
+; ---------------------------------------------------------------------------
+!macro customInstallMode
+  StrCpy $isForceCurrentInstall "1"
+!macroend
+
+; ---------------------------------------------------------------------------
 ; electron-builder hook: runs inside .onInit, after initMultiUser and before
 ; CHECK_APP_RUNNING / uninstallOldVersion / installApplicationFiles.
 ; ---------------------------------------------------------------------------
 !macro customInit
+  ; Force the per-user mode on EVERY installer run, including silent and
+  ; update-handoff invocations (which never show the install-mode page) and
+  ; invocations carrying /allusers: initMultiUser may have selected
+  ; per-machine above, and this unconditionally restores CurrentUser before
+  ; anything touches the filesystem or registry. The setter changes
+  ; $installMode and the shell context, but not initMultiUser's installation
+  ; state flags. installer.nsi's later silent consumer reads
+  ; $hasPerMachineInstallation to decide whether to elevate and restore the
+  ; all-users mode, so restore those flags as one per-user state transition.
+  ; The template macro is always defined in real builds (multiUser.nsh is
+  ; unconditionally included); the guard keeps standalone protocol harnesses
+  ; compiling, and the install-mode runtime test proves the guard resolves.
+  !ifmacrodef setInstallModePerUser
+    !insertmacro setInstallModePerUser
+    StrCpy $hasPerMachineInstallation "0"
+    StrCpy $hasPerUserInstallation "1"
+  !endif
   !insertmacro YTVW_PARSE_HANDOFF
   ${If} $ytvwHandoffMode == "invalid"
     SetErrorLevel ${YTVW_EXIT_BAD_HANDOFF}
@@ -345,4 +473,111 @@ Var ytvwMarkerWritten
 !macroend
 
 !endif ; YTVW_NSIS_INCLUDE_GUARD
+!endif ; BUILD_UNINSTALLER
+
+; ===========================================================================
+; youtubetv-for-windows - profile-removing uninstaller (todo 7)
+; ===========================================================================
+;
+; This half of the include compiles ONLY for the uninstaller build
+; (`BUILD_UNINSTALLER` is defined by electron-builder when it compiles the
+; uninstaller script from the same source tree). It owns a separate variable
+; namespace ($ytvwUn*) so the installer half above stays untouched, and it
+; defines exactly one template hook: `customUnInstall`, which
+; `uninstaller.nsh` invokes after `un.checkAppRunning` (the template already
+; waits for the running app to close, in silent and assisted mode alike)
+; and before any install-directory/registry/shortcut removal.
+;
+; UPGRADE VS UNINSTALL: during an installer-driven upgrade,
+; `installUtil.nsh:uninstallOldVersion` always executes the previous
+; uninstaller as `<uninstaller> /S /KEEP_APP_DATA ... --updated`. The macro
+; below parses the uninstaller's own command line for `/KEEP_APP_DATA` and
+; returns without touching anything when it is present, so the persistent
+; sign-in profile (and the sibling update-status markers) SURVIVE updates.
+; A real user-invoked uninstall (Control Panel, Start menu, Uninstall.exe,
+; QuietUninstallString) never carries that flag, so only that path removes
+; the data tree. Failing open here keeps credentials; it never destroys
+; them.
+;
+; REMOVED TREES (fixed conventions):
+;   ${YTVW_DATA_ROOT}\${YTVW_DATA_DIR_NAME}
+;     == %LOCALAPPDATA%\youtubetv-for-windows in production
+;     (profile + updates + update-status + diagnostics)
+;   ${YTVW_ROAMING_DATA_ROOT}\${YTVW_ROAMING_DATA_DIR_NAME}
+;     == %APPDATA%\youtubetv-for-windows in production
+;     (Electron's default userData cache and configuration)
+;
+; LOCK FAILURE: after `RMDir /r`, any surviving file under the data tree
+; means a handle is still open (the app did not shut down, or a lock
+; survived it). The uninstaller then shows the bilingual failure (`/SD IDOK`
+; keeps silent uninstalls non-blocking: the message is skipped there and
+; only the nonzero exit reports) and aborts instead of silently leaving
+; credentials behind. Re-running the uninstaller after closing the app
+; completes the removal.
+;
+; ENCODING: this file is UTF-8 WITH BOM (EF BB BF). makensis reads a
+; BOM-less script as ACP and aborts with "Bad text encoding" on the
+; Traditional Chinese message below; the BOM makes it read UTF-8.
+; ===========================================================================
+
+!ifdef BUILD_UNINSTALLER
+
+!ifndef YTVW_NSIS_UNINSTALL_GUARD
+!define YTVW_NSIS_UNINSTALL_GUARD
+
+!ifndef YTVW_DATA_DIR_NAME
+  !define YTVW_DATA_DIR_NAME "youtubetv-for-windows"
+!endif
+!ifndef YTVW_DATA_ROOT
+  !define YTVW_DATA_ROOT "$LOCALAPPDATA"
+!endif
+!ifndef YTVW_ROAMING_DATA_DIR_NAME
+  !define YTVW_ROAMING_DATA_DIR_NAME "youtubetv-for-windows"
+!endif
+!ifndef YTVW_ROAMING_DATA_ROOT
+  !define YTVW_ROAMING_DATA_ROOT "$APPDATA"
+!endif
+
+Var ytvwUnParameters
+Var ytvwUnKeepFlag
+
+; ---------------------------------------------------------------------------
+; YTVW_REMOVE_DATA_DIRECTORY
+;   Removes both whole per-user data trees, except on the upgrade path
+;   (`/KEEP_APP_DATA` on the uninstaller command line), where it returns
+;   without touching either tree. On a lock failure it reports bilingually and
+;   aborts the uninstall with a nonzero exit.
+; ---------------------------------------------------------------------------
+!macro YTVW_REMOVE_DATA_DIRECTORY
+  ${GetParameters} $ytvwUnParameters
+  ; Initialized so the flag variable is referenced even on the upgrade path;
+  ; an unreferenced Var trips NSIS warning 6001, which the packaging
+  ; configuration promotes to an error.
+  StrCpy $ytvwUnKeepFlag ""
+  ClearErrors
+  ${GetOptions} $ytvwUnParameters "/KEEP_APP_DATA" $ytvwUnKeepFlag
+  ${IfNot} ${Errors}
+    Goto ytvwUnRemoveDone
+  ${EndIf}
+  ClearErrors
+  RMDir /r "${YTVW_DATA_ROOT}\${YTVW_DATA_DIR_NAME}"
+  RMDir /r "${YTVW_ROAMING_DATA_ROOT}\${YTVW_ROAMING_DATA_DIR_NAME}"
+  ClearErrors
+  IfFileExists "${YTVW_DATA_ROOT}\${YTVW_DATA_DIR_NAME}\*.*" ytvwUnRemoveFailed 0
+  IfFileExists "${YTVW_ROAMING_DATA_ROOT}\${YTVW_ROAMING_DATA_DIR_NAME}\*.*" ytvwUnRemoveFailed ytvwUnRemoveDone
+  ytvwUnRemoveFailed:
+  MessageBox MB_OK|MB_ICONEXCLAMATION "無法移除設定檔與應用程式資料，請先關閉應用程式後再執行解除安裝。$\r$\nThe profile and application data could not be removed. Close the app and run the uninstaller again.$\r$\n(${YTVW_DATA_ROOT}\${YTVW_DATA_DIR_NAME})$\r$\n(${YTVW_ROAMING_DATA_ROOT}\${YTVW_ROAMING_DATA_DIR_NAME})" /SD IDOK
+  Abort
+  ytvwUnRemoveDone:
+!macroend
+
+; ---------------------------------------------------------------------------
+; electron-builder hook: runs inside the uninstall section after the
+; template's app-running check and before file/registry/shortcut removal.
+; ---------------------------------------------------------------------------
+!macro customUnInstall
+  !insertmacro YTVW_REMOVE_DATA_DIRECTORY
+!macroend
+
+!endif ; YTVW_NSIS_UNINSTALL_GUARD
 !endif ; BUILD_UNINSTALLER
