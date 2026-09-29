@@ -8,7 +8,6 @@ import {
 import { installPopupPolicy, type PopupPolicyHost } from "./popup-policy.ts";
 import { activateIdentityPolicy } from "./session.ts";
 import type { IdentityPolicySession } from "./session.ts";
-import type { PreWindowDecision } from "./update/startup.ts";
 import { assertIdentityPolicy } from "./user-agent.ts";
 import { buildWindowOptions } from "./window.ts";
 import type { SecureWindowOptions } from "./window.ts";
@@ -60,12 +59,6 @@ export interface HostPolicyDeps {
   // production entry passes a sink here ONLY when the documented sentinel
   // file enabled diagnostics (see diagnostics.ts).
   diagnostics?: DiagnosticRecorder;
-  // The todo 6 pre-window update stage. When provided it MUST resolve before
-  // any window exists; a `quit` decision means the verified installer has
-  // been handed off and this process must not create a window at all. When
-  // absent (unit tests, fixture scenarios that predate todo 6) the host
-  // launches directly, exactly as before.
-  preWindowStage?: () => Promise<PreWindowDecision>;
 }
 
 // F11 is the only host-level key binding: it toggles fullscreen. Esc is
@@ -81,28 +74,19 @@ export function attachFullscreenToggle(window: HostWindow): void {
   });
 }
 
-// Composition root: activate the fixed identity first, assert it, run the
-// injected pre-window stage exactly once, then create the (validated,
+// Composition root: activate the fixed identity first, assert it, then create
+// the (validated,
 // fullscreen, sandboxed) window, install the navigation + popup policies
 // when policy dependencies are provided, and load the target exactly once.
 // The target never loads unless the identity policy activated successfully.
 //
-// Returns null when the pre-window stage decided to quit (a verified update
-// was handed to NSIS): in that case NO window is created, which is the
-// ordering guarantee the update contract depends on.
 export async function startHost(
   runtime: HostRuntime,
   targetUrl: string,
   policies?: HostPolicyDeps,
-): Promise<StartedHost | null> {
+): Promise<StartedHost> {
   const evidence = activateIdentityPolicy(runtime.session);
   assertIdentityPolicy(evidence.userAgent);
-  if (policies?.preWindowStage !== undefined) {
-    const decision = await policies.preWindowStage();
-    if (decision.action === "quit") {
-      return null;
-    }
-  }
   const options = buildWindowOptions(runtime.appPath);
   const window = runtime.createWindow(options);
   policies?.diagnostics?.record({

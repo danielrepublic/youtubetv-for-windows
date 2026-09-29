@@ -57,25 +57,11 @@ test("no override path exists anywhere in production source", () => {
   // by the dedicated environment-read test below, which bans it everywhere
   // except the single LOCALAPPDATA read that fixes the profile convention.
   // NOTE: readFileSync is intentionally absent too: it is handled by the
-  // host-surface file-read test below, because the updater domain owns
-  // legitimate file I/O (lock + manifest) under src/main/update/.
-  //
-  // process.argv has exactly ONE sanctioned reader: the nonce allowlist
-  // module that parses the NSIS relaunch handoff (--update-nonce only). The
-  // separate test below proves the allowlist list itself is exactly one
-  // file, that the parser ignores everything else, and that no other
-  // argument literal exists in that module. Every other src/ file remains
-  // banned outright.
-  const launchArgumentsFile = path.join(
-    srcDirectory,
-    "main",
-    "update",
-    "launch-arguments.ts",
-  );
+  // host-surface file-read test below.
   const forbidden = [
     {
       pattern: /process\.argv/,
-      allowlist: new Set([launchArgumentsFile]),
+      allowlist: new Set(),
     },
     { pattern: /commandLine/ },
     { pattern: /getenv/ },
@@ -104,85 +90,25 @@ test("no override path exists anywhere in production source", () => {
   assert.deepEqual(violations, []);
 });
 
-test("the only argument read is the narrow update-nonce parser", async () => {
-  const launchArgumentsFile = path.join(
-    srcDirectory,
-    "main",
-    "update",
-    "launch-arguments.ts",
-  );
+test("the process argument vector has no production readers", () => {
   const readers = listSourceFiles().filter((file) =>
     /process\.argv/.test(fs.readFileSync(file, "utf8")),
   );
-  assert.deepEqual(
-    readers,
-    [launchArgumentsFile],
-    "exactly one src/ file may read the process argument vector",
-  );
-
-  const { UPDATE_NONCE_FLAG, parseUpdateNonce, readLaunchUpdateNonce } =
-    await import("../../src/main/update/launch-arguments.ts");
-  assert.equal(UPDATE_NONCE_FLAG, "--update-nonce");
-  // Only the nonce flag is honored...
-  assert.equal(parseUpdateNonce(["--update-nonce=abc-DEF-123"]), "abc-DEF-123");
-  // ...and every override-shaped argument is dropped.
-  for (const argumentVector of [
-    ["--user-agent=evil"],
-    ["--url=https://evil.example/"],
-    ["--target-url=https://evil.example/"],
-    ["--profile=C:\\evil"],
-    ["/D=C:\\evil"],
-    ["--diagnostics"],
-    ["--update-nonce-evil=deadbeef"],
-  ]) {
-    assert.equal(parseUpdateNonce(argumentVector), null);
-  }
-  // The ambient vector of this process carries no nonce.
-  assert.equal(readLaunchUpdateNonce(), null);
-
-  // Executable code in the allowlisted module contains exactly one
-  // double-dash literal: the nonce flag. No second hidden switch can exist.
-  const codeOnly = fs
-    .readFileSync(launchArgumentsFile, "utf8")
-    .split("\n")
-    .filter((line) => {
-      const trimmed = line.trimStart();
-      return (
-        !trimmed.startsWith("//") &&
-        !trimmed.startsWith("*") &&
-        !trimmed.startsWith("/*")
-      );
-    })
-    .join("\n");
-  const flagLiterals = codeOnly.match(/--[A-Za-z][A-Za-z0-9-]*/g) ?? [];
-  assert.deepEqual([...new Set(flagLiterals)], ["--update-nonce"]);
+  assert.deepEqual(readers, []);
 });
 
-test("only the updater domain reads files, and it cannot steer identity", () => {
+test("host file reads cannot steer identity", () => {
   // Config-file-driven identity overrides would hide behind file reads, so
-  // readFileSync is banned on the host surface (every src file outside
-  // src/main/update/). The updater domain is exempt — its lock and manifest
-  // handling is file I/O by design — but it must never reference the
-  // identity partition or the profile session-data path, so its files
-  // cannot steer identity storage even though they can read the disk.
-  const updateSegment = path.join("src", "main", "update") + path.sep;
+  // readFileSync is banned throughout the production source.
   const hostViolations = [];
-  const steeringViolations = [];
   for (const file of listSourceFiles()) {
     const relative = path.relative(repositoryRoot, file);
     const contents = fs.readFileSync(file, "utf8");
-    if (relative.startsWith(updateSegment)) {
-      for (const pattern of [/persist:youtubetv/, /sessionData/]) {
-        if (pattern.test(contents)) {
-          steeringViolations.push(`${relative} matches ${pattern}`);
-        }
-      }
-    } else if (/readFileSync/.test(contents)) {
+    if (/readFileSync/.test(contents)) {
       hostViolations.push(relative);
     }
   }
   assert.deepEqual(hostViolations, []);
-  assert.deepEqual(steeringViolations, []);
 });
 
 test("the only environment read is the profile-path LOCALAPPDATA convention", () => {

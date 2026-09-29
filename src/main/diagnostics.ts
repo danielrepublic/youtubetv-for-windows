@@ -32,19 +32,16 @@
 //
 // REDACTION: every record passes through a pure sanitizer before it is
 // serialized. Fields are strictly allowlisted ({ ts, event, origin?,
-// errorCode?, windowKind?, updateCode? }); unknown keys are dropped and
+// errorCode?, windowKind? }); unknown keys are dropped and
 // unknown events are rejected outright. `ts` always comes from the trusted
 // clock, never from the caller. Origins are normalised with
 // `new URL(...).origin`, which strips credentials, paths, query strings and
-// fragments by construction. `updateCode` is validated against the closed
-// classified-code vocabulary of the update domain, so it cannot carry free
-// text either. A secret-shape detector additionally refuses any string that
+// fragments by construction. A secret-shape detector additionally refuses any string that
 // looks like a JWT, a bearer token, a cookie, an authorization header, a
 // `token=` parameter, or a long base64/hex blob.
 
 import fs from "node:fs";
 import path from "node:path";
-import { UPDATE_ERROR_CODES } from "./update/error-codes.ts";
 
 export const DIAGNOSTICS_SUBDIRECTORY_NAME = "diagnostics";
 export const DIAGNOSTICS_ENABLE_MARKER_NAME = "ENABLED";
@@ -59,13 +56,11 @@ export const ALLOWED_DIAGNOSTIC_FIELDS = [
   "origin",
   "errorCode",
   "windowKind",
-  "updateCode",
 ] as const;
 export type AllowedDiagnosticField = (typeof ALLOWED_DIAGNOSTIC_FIELDS)[number];
 
-// The complete event vocabulary: lifecycle + numeric codes only, plus the
-// todo 6 update-stage events. No event carries free text; `updateCode` is a
-// closed vocabulary member.
+// The complete event vocabulary is lifecycle plus numeric codes. No event
+// carries free text.
 export const DIAGNOSTIC_EVENTS = [
   "app-ready",
   "app-quit",
@@ -75,21 +70,11 @@ export const DIAGNOSTIC_EVENTS = [
   "load-failed",
   "auth-window-opened",
   "auth-window-closed",
-  "update-check-completed",
-  "update-check-timeout",
-  "update-spawned",
-  "update-spawn-failed",
-  "update-relaunch-verified",
-  "update-relaunch-repair",
 ] as const;
 export type DiagnosticEvent = (typeof DIAGNOSTIC_EVENTS)[number];
 
 export const DIAGNOSTIC_WINDOW_KINDS = ["main", "auth"] as const;
 export type DiagnosticWindowKind = (typeof DIAGNOSTIC_WINDOW_KINDS)[number];
-
-const UPDATE_CODE_VALUES: ReadonlySet<string> = new Set<string>(
-  Object.values(UPDATE_ERROR_CODES),
-);
 
 // What call sites hand to a recorder. Values are `unknown` on purpose: the
 // sanitizer re-validates every field no matter how the caller typed it.
@@ -98,7 +83,6 @@ export interface DiagnosticInput {
   origin?: string;
   errorCode?: number;
   windowKind?: DiagnosticWindowKind | string;
-  updateCode?: string;
 }
 
 export interface SanitizedDiagnosticRecord {
@@ -107,7 +91,6 @@ export interface SanitizedDiagnosticRecord {
   origin?: string;
   errorCode?: number;
   windowKind?: DiagnosticWindowKind;
-  updateCode?: string;
 }
 
 // The narrow surface policies depend on, so production passes the file sink
@@ -185,15 +168,6 @@ function sanitizeWindowKind(value: unknown): DiagnosticWindowKind | undefined {
   return undefined;
 }
 
-// Closed-vocabulary validator: only a code the update domain itself can
-// produce survives. Free text, secrets, and unknown codes are dropped.
-function sanitizeUpdateCode(value: unknown): string | undefined {
-  if (typeof value !== "string" || !UPDATE_CODE_VALUES.has(value)) {
-    return undefined;
-  }
-  return value;
-}
-
 export function isDiagnosticEvent(value: string): value is DiagnosticEvent {
   return (DIAGNOSTIC_EVENTS as readonly string[]).includes(value);
 }
@@ -229,10 +203,6 @@ export function sanitizeDiagnosticRecord(
   const windowKind = sanitizeWindowKind(source["windowKind"]);
   if (windowKind !== undefined) {
     record.windowKind = windowKind;
-  }
-  const updateCode = sanitizeUpdateCode(source["updateCode"]);
-  if (updateCode !== undefined) {
-    record.updateCode = updateCode;
   }
   return record;
 }
