@@ -138,7 +138,7 @@ youtubetv-for-windows 已安裝 / Already installed
 - 解除安裝會刪掉兩整塊：安裝資料夾 `C:\Program Files\youtubetv-for-windows`（程式本身），以及資料根目錄 `C:\ProgramData\youtubetv-for-windows` 底下的整棵樹，也就是這台電腦上所有 Windows 使用者的設定檔與使用者資料。
 - 你的設定檔在 `%PROGRAMDATA%\youtubetv-for-windows\users\<key>\profile`（Cookie、快取、登入狀態），使用者資料在 `%PROGRAMDATA%\youtubetv-for-windows\users\<key>\userdata`。刪掉就是真的刪掉，沒有任何復原（no rollback），下次裝回來要重新登入。
 - 唯一的例外是換版本：安裝程式在覆蓋舊版本時，會叫解除安裝程式保留資料再裝新的，那一輪資料會留下來。只有你自己發起的解除安裝會刪資料。
-- 還有一個舊版本留下來的目錄不會被刪掉：`%APPDATA%\youtubetv-for-windows`（在你的個人資料夾裡）。裡面只有顯示用的快取（GPU 與 shader 快取）和一份本機狀態檔，沒有 Cookie、密碼、觀看紀錄或登入狀態。現在的版本啟動時就把資料路徑轉到 `%PROGRAMDATA%`，不會再寫入這個目錄；解除安裝也不會刪掉它，想清掉的話直接刪掉整個資料夾就好。
+- 還有一個舊版本留下來的目錄不會被刪掉：`%APPDATA%\youtubetv-for-windows`（在你的個人資料夾裡）。早期版本留在裡面的只有顯示用的快取（GPU 與 shader 快取）和一份本機狀態檔，沒有 Cookie、密碼、觀看紀錄或登入狀態。現在的版本啟動時就把資料路徑轉到 `%PROGRAMDATA%`，所以平常這個目錄只會留著早期版本留下的那些檔案。只有「你的資料存在哪裡」那一節說的例外一發生時，它才會變成這個程式的資料根目錄，那時裡面才會有一整棵 `users\<key>` 的設定檔與登入狀態。解除安裝不會刪掉它，想清掉的話直接刪掉整個資料夾就好。
 - 重新安裝不會動到設定檔，只有解除安裝會清除。
 
 ### 你的資料存在哪裡
@@ -150,7 +150,14 @@ youtubetv-for-windows 已安裝 / Already installed
 - 使用者資料：`%PROGRAMDATA%\youtubetv-for-windows\users\<key>\userdata`（Electron 的快取與設定）。
 - 診斷紀錄（預設關閉）：`%PROGRAMDATA%\youtubetv-for-windows\users\<key>\diagnostics`。
 
-放在這裡有兩個好處：每個 Windows 使用者各有自己的子資料夾，兩個人不會共用同一份登入狀態；資料根目錄不在你的個人資料夾裡，所以換帳號或重灌系統時比較容易整棵一起處理。整棵資料樹都在這個根目錄底下，你的個人資料夾裡不會有這個程式的任何資料（見「解除安裝會刪掉什麼」）。`C:\ProgramData` 預設只有系統管理員寫得進去，所以安裝程式會把這個資料根目錄的權限開放給本機的 Users 群組。
+放在這裡有兩個好處：每個 Windows 使用者各有自己的子資料夾，兩個人不會共用同一份登入狀態；資料根目錄不在你的個人資料夾裡，所以換帳號或重灌系統時比較容易整棵一起處理。`C:\ProgramData` 預設只有系統管理員寫得進去，所以安裝程式會把這個資料根目錄的權限開放給本機的 Users 群組。
+
+平常啟動時，上面列的整棵資料樹就是全部的落點：設定檔、使用者資料與診斷紀錄都寫在 `%PROGRAMDATA%\youtubetv-for-windows` 底下，`%APPDATA%` 與 `%LOCALAPPDATA%` 都不會被寫入（見「解除安裝會刪掉什麼」）。程式有兩個例外，什麼時候會用到由程式自己判斷：
+
+- 例外一：`%PROGRAMDATA%` 沒有值或是空字串的時候，資料根目錄退到 `%APPDATA%\youtubetv-for-windows\users\<key>`。一樣每個使用者一個子資料夾，這一次的設定檔與使用者資料就寫在你的個人資料夾裡。
+- 例外二：資料根目錄不能建立或不能使用（權限不足、磁碟滿、路徑被別的檔案佔掉）的時候，程式會改用 Windows 暫存資料夾 `%LOCALAPPDATA%\Temp` 底下的一個全新目錄（名稱是 `youtubetv-for-windows-profile-` 開頭，後面接一段隨機字元），啟動時會跳一個視窗告訴你資料改放在哪裡。這一次開啟的登入狀態不會保留，下次啟動會是一個全新的設定檔。
+
+這兩個例外用的目錄，解除安裝都不會刪掉。手動刪掉是安全的，程式下次啟動會自己重新建立需要的部分。
 
 資料根目錄是搬過來的，這點要說清楚：早期版本是「只給單一帳號」的安裝，資料放在你的個人資料夾，當年的說明寫的是 `%LOCALAPPDATA%\youtubetv-for-windows\profile`。舊資料不會被自動搬到新位置，程式也不會去讀它，所以你在舊位置的設定與登入狀態等於要重來一次。舊檔案要你自己刪，解除安裝也不會刪到那裡。
 
@@ -297,7 +304,7 @@ As long as you pick "Reinstall", the installer itself deletes nothing in and cha
 - Uninstall deletes two whole trees: the install directory `C:\Program Files\youtubetv-for-windows` (the app itself), and everything under the data root `C:\ProgramData\youtubetv-for-windows`, which is the settings and user data of every Windows user on this PC.
 - Your profile is at `%PROGRAMDATA%\youtubetv-for-windows\users\<key>\profile` (cookies, cache, sign-in state) and your user data at `%PROGRAMDATA%\youtubetv-for-windows\users\<key>\userdata`. Once deleted, they are gone: there is no rollback, and installing the app again means signing in from scratch.
 - The one exception is a version change. When the installer replaces an older version it runs the uninstaller with an instruction to keep the data, so that pass leaves your data alone. Only an uninstall you start yourself deletes the data.
-- One leftover folder from older builds is not removed: `%APPDATA%\youtubetv-for-windows`, inside your user profile folder. It holds only graphics caches (GPU and shader caches) and one local-state file, with no cookies, no passwords, no watch history, and no sign-in state. The current build redirects its data paths to `%PROGRAMDATA%` at startup and no longer writes there; uninstalling does not delete it, and deleting the folder by hand is safe.
+- One folder from older builds is not removed: `%APPDATA%\youtubetv-for-windows`, inside your user profile folder. What earlier builds left in it is only graphics caches (GPU and shader caches) and one local-state file, with no cookies, no passwords, no watch history, and no sign-in state. The current build redirects its data paths to `%PROGRAMDATA%` at startup, so normally nothing new is written into that folder. It becomes this app's data root only in the first exception described under "Where your data lives", and only then does it hold a full `users\<key>` tree with your profile and sign-in state. Uninstalling does not delete it, and deleting the folder by hand is safe.
 - Reinstalls keep the profile. Only uninstall wipes it.
 
 ### Where your data lives
@@ -309,7 +316,14 @@ Your data lives under the machine-wide data root `C:\ProgramData\youtubetv-for-w
 - User data: `%PROGRAMDATA%\youtubetv-for-windows\users\<key>\userdata` (Electron's caches and settings).
 - Diagnostics (off by default): `%PROGRAMDATA%\youtubetv-for-windows\users\<key>\diagnostics`.
 
-Two reasons it sits there. Each Windows user gets their own subdirectory, so two people on one PC never share a sign-in state. And the data root is not inside your user profile folder, which makes it easier to handle as one tree when you change accounts or reinstall Windows. The whole tree lives under that root, and nothing from this app is written inside your user profile folder (see "What uninstall removes"). `C:\ProgramData` normally allows writes for administrators only, so the installer grants the local Users group access to that data root.
+Two reasons it sits there. Each Windows user gets their own subdirectory, so two people on one PC never share a sign-in state. And the data root is not inside your user profile folder, which makes it easier to handle as one tree when you change accounts or reinstall Windows. `C:\ProgramData` normally allows writes for administrators only, so the installer grants the local Users group access to that data root.
+
+On a normal start, the whole tree listed above is the only place anything is written: the profile, the user data and the diagnostic logs all go under `%PROGRAMDATA%\youtubetv-for-windows`, and neither `%APPDATA%` nor `%LOCALAPPDATA%` is written to (see "What uninstall removes"). The app has two exceptions, and it decides for itself when each one applies:
+
+- Exception one: when `%PROGRAMDATA%` has no value or is an empty string, the data root falls back to `%APPDATA%\youtubetv-for-windows\users\<key>`. Each user still gets their own subdirectory, but this time the profile and the user data are written inside your user profile folder.
+- Exception two: when the data root cannot be created or used (not enough permissions, a full disk, a path taken by some other file), the app starts with a temporary profile in a brand-new directory under the Windows temp folder `%LOCALAPPDATA%\Temp` (named `youtubetv-for-windows-profile-` followed by a run of random characters) and shows you a window saying where the data went. Sign-in state does not persist for that start; the next start is a fresh profile.
+
+Uninstall does not delete either of those fallback locations. Deleting either one by hand is safe, because the app recreates what it needs on the next start.
 
 The data root moved, and that is worth stating plainly. Earlier releases were a single-account install and kept their data in your user profile folder; the README of the time pointed at `%LOCALAPPDATA%\youtubetv-for-windows\profile`. Nothing copies that old data to the new location and nothing reads it there, so settings and sign-in state you had in the old place have to be set up and signed in again. The old files are yours to delete, and uninstalling does not touch them.
 
