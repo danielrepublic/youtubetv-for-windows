@@ -25,12 +25,38 @@
 //   - the real define set compiles under -WX (electron-builder passes
 //     warningsAsErrors), including the path with no `YTVW_*` override at all;
 //   - the hook creates the root and leaves the local Users group a
-//     non-inherited `(OI)(CI)` grant on it whose DECODED access mask is the
-//     Modify set plus FILE_DELETE_CHILD, and carries neither WRITE_DAC nor
-//     WRITE_OWNER nor GENERIC_ALL;
+//     non-inherited `(OI)(CI)` grant on it whose DECODED access mask is
+//     exactly the Modify set plus FILE_DELETE_CHILD, and carries neither
+//     WRITE_DAC nor WRITE_OWNER nor GENERIC_ALL;
 //   - a non-directory root, a failing grant, and a missing ProgramData each
 //     abort the install (a silent install exits nonzero) instead of
 //     continuing with an unusable or drive-relative path.
+//
+// WHAT THE GRANT IS, AND WHAT IT IS NOT - the honest version.
+//
+// The grant exists so a standard user can CREATE `users\<key>\profile` and
+// `userdata` under a root the ELEVATED installer created. On this machine that
+// ability does not come from the data root's own DACL; it comes from the ACE
+// C:\ProgramData already carries, `BUILTIN\Users:(CI)(WD,AD,WEA,WA)` = 0x116.
+// The explicit grant makes the app's write access a property of the data root's
+// OWN DACL rather than an inheritance accident, so the app still works on a
+// machine whose ProgramData has that inherited ACE reduced or removed.
+//
+// It is NOT a behavioural fix for a measured failure, and this suite must not be
+// read as one. Measured, with a retained instrument and a grant-absent control
+// on a tree carrying the installed tree's real shape and ACL
+// (release-evidence/installer-mode/todo13-real/run-20260930-221942-acl-grant-control/01-grant-absent-control.log):
+// a Medium-integrity token with NO Users grant completes 11 of the 12 disputed
+// operations, and the 12th (single-call removal of a NON-EMPTY directory) fails
+// with ENOTEMPTY under the grant too, because NTFS refuses a non-empty
+// directory regardless of the caller's rights. FILE_DELETE_CHILD is therefore
+// NOT behaviourally required for any operation the app performs. Every object
+// the app writes is app-created, and an inherited CREATOR OWNER ACE already
+// authorises what a token created itself.
+//
+// Consequently this suite asserts the MASK and never a behavioural necessity for
+// any individual right. The exact-mask assertion below subsumes the separate
+// delete-child bit check, so removing that check does not weaken the suite.
 
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
@@ -69,6 +95,12 @@ const USERS_SID_ALIASES = ["BU", "S-1-5-32-545"];
 // FILE_DELETE_CHILD. 0x1301FF is 0x1301BF plus exactly 0x40. 0x1F01FF is the
 // full-access mask and carries WRITE_DAC and WRITE_OWNER, which is why the
 // grant must never be widened to the simple right `F`.
+//
+// The three numbers are assertions about the GRANT, not about what the app can
+// do. FILE_DELETE_CHILD's presence is not behaviourally load-bearing; see the
+// header note above and the measured evidence it cites. The numbers stay pinned
+// because the grant is specified as Modify named bit by bit, and that is a
+// stronger property than any single right's necessity.
 const MODIFY_MASK = 0x1301bf;
 const FILE_DELETE_CHILD = 0x00000040;
 const WRITE_DAC = 0x00040000;
@@ -434,13 +466,21 @@ function assertUsersDeleteChildGrant(target) {
     )}; granted ${hex(ace.mask)} is missing ${hex(missing)} on ${target}`,
   );
 
-  assert.equal(
-    (ace.mask & FILE_DELETE_CHILD) !== 0,
-    true,
-    `FILE_DELETE_CHILD (0x40) must be granted or a standard user cannot delete ` +
-      `a child of the data root outright; granted mask ${hex(ace.mask)} on ` +
-      `${target} from ACE (${ace.ace})`,
-  );
+  // There is deliberately NO separate "FILE_DELETE_CHILD must be granted or a
+  // standard user cannot X" assertion. That claim was measured and refuted: with
+  // no Users grant at all, a Medium-integrity token still completes 11 of the
+  // same 12 operations, because every object the app creates is owned by the app
+  // itself through the inherited CREATOR OWNER ACE, and the twelfth (single-call
+  // removal of a NON-EMPTY directory) fails with ENOTEMPTY under the grant too.
+  // Asserting the bit with a behavioural reason would enshrine a claim that
+  // measurement contradicts, and a test that asserts something untrue is worse
+  // than no test.
+  //
+  // The bit is still pinned, and this suite is NOT weakened by its absence: the
+  // exact-mask assertion a few lines below requires
+  // `ace.mask === MODIFY_MASK | FILE_DELETE_CHILD`, which STRICTLY IMPLIES
+  // `ace.mask & FILE_DELETE_CHILD !== 0`. The mask assertion is the stronger
+  // claim, and it is correct.
 
   for (const [bit, name] of [
     [WRITE_DAC, "WRITE_DAC"],

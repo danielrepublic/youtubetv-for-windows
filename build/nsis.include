@@ -146,11 +146,42 @@
 ;
 ; WHY AN EXPLICIT RIGHTS SET AND NOT THE SIMPLE RIGHT `M`: measured on this
 ; machine, `icacls ... (OI)(CI)M` decodes to access mask 0x1301BF, and
-; 0x1301BF is 0x1FF minus 0x40 - FILE_DELETE_CHILD is NOT in it. A standard
-; user can create, write and delete a file, and can delete a subdirectory only
-; after emptying it, but cannot delete a child outright. The rights set below
-; decodes to 0x1301FF, which is exactly that mask plus 0x40, and icacls's own
-; renderer reduces it back to `(M,DC)`.
+; 0x1301BF is 0x1FF minus 0x40 - FILE_DELETE_CHILD is NOT in it. The rights
+; set below decodes to 0x1301FF, which is exactly that mask plus 0x40, and
+; icacls's own renderer reduces it back to `(M,DC)`.
+;
+; WHY THE GRANT IS THERE AT ALL, IN THE HONEST MEASURED TERMS. The app runs as
+; a standard user and has to CREATE `users\<key>\profile` and `userdata` under a
+; root the ELEVATED installer created. On this machine that ability does NOT come
+; from the data root's own DACL. It comes from the ACE C:\ProgramData already
+; carries by inheritance, `BUILTIN\Users:(CI)(WD,AD,WEA,WA)`, decoded 0x116
+; (FILE_WRITE_DATA 0x2 + FILE_APPEND_DATA 0x4 + FILE_WRITE_EA 0x10 +
+; FILE_WRITE_ATTRIBUTES 0x100). On a DIRECTORY 0x2 and 0x4 ARE the add-file and
+; add-subdirectory rights, so that inherited ACE is the only reason the app can
+; make its own directories at all. The grant below makes the app's write access a
+; property of the data root's OWN DACL instead of an inheritance accident, so a
+; machine whose ProgramData has that inherited 0x116 reduced or removed by
+; hardening or policy still works. MEASURED WITH A CONTROL, not asserted: on a
+; ProgramData subtree with every Users ACE removed, a Medium-integrity token
+; cannot even create a work directory (EPERM); on the same tree with this grant
+; applied it can. Evidence and its retained instrument:
+; release-evidence/installer-mode/todo13-real/run-20260930-221942-acl-grant-control/01-grant-absent-control.log
+;
+; WHAT THE GRANT IS *NOT*, CORRECTED AGAINST MEASUREMENT. FILE_DELETE_CHILD is
+; NOT behaviourally load-bearing, and the claim that it was - "a standard user
+; cannot delete a child outright" - is REFUTED and withdrawn. Run against a
+; grant-absent tree carrying the installed tree's real shape and ACL, a Medium
+; token completed 11 of the same 12 probe operations, and the 12th (single-call
+; removal of a NON-EMPTY directory) fails with ENOTEMPTY under THIS grant too,
+; because NTFS refuses a non-empty directory regardless of the caller's rights.
+; The inherited CREATOR OWNER ACE `(A;OICIIO;GA;;;CO)` explains the 11: every
+; object the app creates is owned by the app's own user, so the token already
+; holds GENERIC_ALL on it. DC is carried because this set is "Modify, named bit
+; by bit", NOT because any operation needs it; naming every bit is what keeps
+; WRITE_DAC and WRITE_OWNER out and what survives a future redefinition of `M`.
+; Every object the app writes is app-created (customInstall below creates only
+; the root), so the app-created class is the one that matters and it does not
+; need DC.
 ;
 ; WHY NOT THE SIMPLE RIGHT `F`: `F` decodes to 0x1F01FF, the full-access mask,
 ; which carries WRITE_DAC (0x40000) and WRITE_OWNER (0x80000). Granting those
@@ -535,6 +566,35 @@
 ; only the nonzero exit reports) and aborts instead of silently leaving
 ; credentials behind. Re-running the uninstaller after closing the app
 ; completes the removal.
+;
+; OPEN SECURITY QUESTION, NOT MITIGATED, NEEDS AN OWNER DECISION. The `RMDir /r`
+; below FOLLOWS DIRECTORY JUNCTIONS in this toolchain, and any member of
+; BUILTIN\Users can plant one inside this tree with no special privilege
+; (`mklink /J` needs none), because the data root is writable by design. The
+; elevated uninstaller then recurses through the link and deletes the target's
+; contents.
+;
+; CONFIRMED FROM THE NSIS SOURCE, not inferred: `RMDir` dispatches to `myDelete`
+; (Source/exehead/exec.c:642-649), whose recursive walk classifies each child
+; with `fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY` (Source/exehead/util.c:229)
+; and recurses on a match (util.c:234). `FILE_ATTRIBUTE_REPARSE_POINT` (0x400) is
+; never tested. A junction reports both bits, so it is taken for a plain
+; subdirectory and the walk enumerates the TARGET's children. `RMDir` accepts
+; only `/r` and `/REBOOTOK` (Source/script.cpp:3596-3617), so there is no switch
+; that avoids this. This is not specific to one makensis build: `myDelete` is
+; byte-identical between upstream v304 and current master.
+;
+; WHY NOTHING WAS CHANGED HERE. The candidates that work are a rewrite of this
+; macro's removal into a script that refuses to descend into reparse points, or
+; a pre-flight check that refuses to uninstall at all when one is present. Both
+; are design decisions with product consequences, and the plan records this
+; question as outside its own scope. Note also that reverting the Users grant
+; does NOT mitigate it: the Modify set already carries FILE_ADD_SUBDIRECTORY,
+; so a standard user can create a junction with or without FILE_DELETE_CHILD.
+;
+; Full determination, blast radius and the six candidate mitigations with their
+; trade-offs:
+; release-evidence/installer-mode/todo13-real/run-20260930-221942-acl-grant-control/02-junction-escalation-rmdir-reparse.log
 ;
 ; ENCODING: this file is UTF-8 WITH BOM (EF BB BF). makensis reads a
 ; BOM-less script as ACP and aborts with "Bad text encoding" on the
