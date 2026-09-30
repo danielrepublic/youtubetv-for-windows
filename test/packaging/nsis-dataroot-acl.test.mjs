@@ -36,11 +36,24 @@
 //
 // The grant exists so a standard user can CREATE `users\<key>\profile` and
 // `userdata` under a root the ELEVATED installer created. On this machine that
-// ability does not come from the data root's own DACL; it comes from the ACE
-// C:\ProgramData already carries, `BUILTIN\Users:(CI)(WD,AD,WEA,WA)` = 0x116.
-// The explicit grant makes the app's write access a property of the data root's
-// OWN DACL rather than an inheritance accident, so the app still works on a
-// machine whose ProgramData has that inherited ACE reduced or removed.
+// ability does not come from the data root's own DACL; it comes from the DACL
+// C:\ProgramData hands down by inheritance. The explicit grant makes the app's
+// write access a property of the data root's OWN DACL rather than an
+// inheritance accident, so the app still works on a machine whose ProgramData
+// Users entries are reduced or removed.
+//
+// Naming ONE inherited ACE as the cause would be wrong, and this file used to
+// do it. C:\ProgramData carries two Users ACEs that pull opposite ways: an
+// ALLOW of 0x1200A9 (read + execute) and a DENY of 0x1015F that covers DELETE,
+// FILE_DELETE_CHILD, FILE_WRITE_DATA, FILE_APPEND_DATA, FILE_WRITE_ATTRIBUTES,
+// FILE_READ_DATA, FILE_WRITE_EA and FILE_READ_EA. A DENY is evaluated before any
+// ALLOW, so the 0x116 reading of icacls's `(CI)(WD,AD,WEA,WA)` cannot be the
+// explanation. What the created object actually shows is Windows resolving the
+// inherited CREATOR OWNER ACE to the creating user's own SID, written in as
+// GENERIC_ALL for that user alone. What is load-bearing for the grant is the
+// measured net effect, not any single inherited ACE: with inheritance intact
+// and no grant a Medium token can create its own subtree; with every Users ACE
+// removed it cannot create anything (EPERM).
 //
 // It is NOT a behavioural fix for a measured failure, and this suite must not be
 // read as one. Measured, with a retained instrument and a grant-absent control

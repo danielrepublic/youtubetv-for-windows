@@ -153,19 +153,42 @@
 ; WHY THE GRANT IS THERE AT ALL, IN THE HONEST MEASURED TERMS. The app runs as
 ; a standard user and has to CREATE `users\<key>\profile` and `userdata` under a
 ; root the ELEVATED installer created. On this machine that ability does NOT come
-; from the data root's own DACL. It comes from the ACE C:\ProgramData already
-; carries by inheritance, `BUILTIN\Users:(CI)(WD,AD,WEA,WA)`, decoded 0x116
-; (FILE_WRITE_DATA 0x2 + FILE_APPEND_DATA 0x4 + FILE_WRITE_EA 0x10 +
-; FILE_WRITE_ATTRIBUTES 0x100). On a DIRECTORY 0x2 and 0x4 ARE the add-file and
-; add-subdirectory rights, so that inherited ACE is the only reason the app can
-; make its own directories at all. The grant below makes the app's write access a
+; from the data root's own DACL; it comes from C:\ProgramData's own DACL, which
+; every child of it inherits. The grant below makes the app's write access a
 ; property of the data root's OWN DACL instead of an inheritance accident, so a
-; machine whose ProgramData has that inherited 0x116 reduced or removed by
-; hardening or policy still works. MEASURED WITH A CONTROL, not asserted: on a
-; ProgramData subtree with every Users ACE removed, a Medium-integrity token
-; cannot even create a work directory (EPERM); on the same tree with this grant
-; applied it can. Evidence and its retained instrument:
-; release-evidence/installer-mode/todo13-real/run-20260930-221942-acl-grant-control/01-grant-absent-control.log
+; machine whose ProgramData Users entries are reduced or removed by hardening or
+; policy still works.
+;
+; WHAT THAT INHERITED BASELINE ACTUALLY IS - the whole entry, because naming one
+; ACE of it is wrong. C:\ProgramData's DACL carries TWO Users ACEs and they pull
+; in opposite directions (measured; see the evidence paths at the end):
+;   (A;OICI;0x1200a9;;;BU)  ALLOW  0x1200A9  generic read + execute
+;   (A;CI;DCLCRPCR;;;BU)    DENY   0x1015F  = DELETE 0x10000 | FILE_WRITE_DATA 0x2
+;                                 | FILE_DELETE_CHILD 0x40 | FILE_WRITE_ATTRIBUTES
+;                                 0x100 | FILE_READ_DATA 0x1 | FILE_WRITE_EA 0x10
+;                                 | FILE_APPEND_DATA 0x4 | FILE_READ_EA 0x8
+; 0x1015F covers the very bits the ALLOW-side 0x116 would have granted (0x2 and
+; 0x4 are add-file and add-subdirectory on a directory), and a DENY is evaluated
+; before any ALLOW. So "the inherited 0x116 ACE is the reason" is NOT a correct
+; description of this DACL, and an earlier draft of this comment said exactly
+; that; it is withdrawn here rather than left to mislead the next reader.
+;
+; WHAT IS MEASURED, and is the actual justification:
+;   * With inheritance intact and NO installer grant, a Medium-integrity token
+;     CAN create its own users\<key>\profile subtree and write in it. The
+;     created directory's own DACL shows why: Windows resolved the inherited
+;     CREATOR OWNER ACE `(A;OICIIO;GA;;;CO)` to the CREATING user's own SID and
+;     wrote it in as `(A;ID;FA;;;S-1-5-21-...)` - GENERIC_ALL, 0x1F01FF, for
+;     that user alone. The Users DENY is present on that same object.
+;   * The same token CANNOT remove a directory the ELEVATED side created
+;     (EPERM), and CANNOT create anything at all once every Users ACE is removed
+;     from the subtree (EPERM on the first mkdir).
+; So the NET effect of ProgramData's inherited Users entries is what lets the
+; app run, and the grant is what makes that true independently of them. It buys
+; INDEPENDENCE FROM THE BASELINE, not a new capability. Evidence, with the
+; instruments retained beside it:
+;   release-evidence/installer-mode/todo13-real/run-20260930-221942-acl-grant-control/01-grant-absent-control.log
+;   release-evidence/installer-mode/todo13-real/run-20260930-2225-acl-justification/07-what-authorises-the-create.log
 ;
 ; WHAT THE GRANT IS *NOT*, CORRECTED AGAINST MEASUREMENT. FILE_DELETE_CHILD is
 ; NOT behaviourally load-bearing, and the claim that it was - "a standard user
