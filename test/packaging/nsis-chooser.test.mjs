@@ -11,6 +11,10 @@
 //     per-user executable, and reports "not installed" when neither exists;
 //   - the uninstall choice runs the REAL generated uninstaller with `/S` and
 //     WITHOUT `/KEEP_APP_DATA`, and the ProgramData machine tree is gone;
+//   - the uninstall choice also removes the WHOLE install directory, the
+//     uninstaller stub included, and the uninstaller resolves that directory
+//     from outside it (it runs from the %TEMP% copy NSIS makes when `_?=` is
+//     absent, which is the whole point of not passing `_?=`);
 //   - the reinstall choice falls through without invoking the uninstaller and
 //     leaves the machine tree byte-identical (the template's upgrade path is
 //     what preserves the profile, via `/KEEP_APP_DATA`);
@@ -248,10 +252,13 @@ function snapshotTree(machineRoot) {
 }
 
 // A standalone BUILD_UNINSTALLER script that writes a real uninstaller whose
-// un. section records its own command line and then runs the include's
-// `customUnInstall` (which removes the scratch ProgramData tree). This is the
-// executable the chooser's uninstall branch launches.
-function innerUninstallerSource(machineBase, argvLogPath) {
+// un. section records its own command line and the directory it resolved, runs
+// the include's `customUnInstall` (which removes the scratch ProgramData tree)
+// and then removes the install directory the way electron-builder's real
+// uninstall section does (`SetOutPath $TEMP` so nothing of the uninstaller is
+// left in $INSTDIR, then `RMDir /r $INSTDIR`). This is the executable the
+// chooser's uninstall branch launches.
+function innerUninstallerSource(machineBase, argvLogPath, resolutionLogPath) {
   return [
     "Unicode true",
     'Name "ytvw-inner-uninstaller"',
@@ -276,7 +283,16 @@ function innerUninstallerSource(machineBase, argvLogPath) {
     `  FileOpen $1 "${argvLogPath}" w`,
     "  FileWrite $1 $0",
     "  FileClose $1",
+    // Where the uninstaller is actually running from ($EXEDIR) and which
+    // directory it resolved as the install directory ($INSTDIR). Written
+    // AFTER the tree removal so a run that aborts on a lock still leaves the
+    // resolution visible for the assertion message.
+    `  FileOpen $1 "${resolutionLogPath}" w`,
+    '  FileWrite $1 "EXEDIR=$EXEDIR INSTDIR=$INSTDIR"',
+    "  FileClose $1",
     "  !insertmacro customUnInstall",
+    "  SetOutPath $TEMP",
+    "  RMDir /r $INSTDIR",
     "SectionEnd",
     "",
   ].join("\n");
@@ -287,9 +303,17 @@ function innerUninstallerSource(machineBase, argvLogPath) {
 // real rather than only building a command line.
 function installInnerUninstaller(harnessCase) {
   const argvLogPath = path.join(harnessCase.directory, "uninstaller-argv.log");
+  const resolutionLogPath = path.join(
+    harnessCase.directory,
+    "uninstaller-resolution.log",
+  );
   fs.writeFileSync(
     path.join(harnessCase.directory, "inner.nsi"),
-    innerUninstallerSource(harnessCase.machineBase, argvLogPath),
+    innerUninstallerSource(
+      harnessCase.machineBase,
+      argvLogPath,
+      resolutionLogPath,
+    ),
     "utf8",
   );
   compile(harnessCase.directory, "inner.nsi");
@@ -311,7 +335,42 @@ function installInnerUninstaller(harnessCase) {
     "the inner stub must generate a real uninstaller",
   );
   fs.copyFileSync(generated, harnessCase.uninstallerPath);
-  return { argvLogPath };
+  return { argvLogPath, resolutionLogPath };
+}
+
+// The uninstaller that is launched WITHOUT `_?=` copies itself to %TEMP% and
+// does the removal from there, so the stub returns before the removal
+// finishes. Polling is therefore part of the contract, not a convenience:
+// asserting immediately would race the copy.
+function waitForRemoval(target, timeoutMs) {
+  return waitFor(
+    () => !fs.existsSync(target),
+    timeoutMs,
+    () => fs.existsSync(target),
+  );
+}
+
+// Bounded poll for a condition the OS settles on its own schedule (a launched
+// uninstaller finishing its removal, a log file appearing). The third argument
+// is `stillPending`, a predicate that stays TRUE while the awaited state has
+// not arrived, so the final answer is one last read of the caller's own
+// condition rather than a guess. The wait between attempts is a timer, not a
+// spawned helper process: the earlier shape spawned a `node` per poll, which
+// cost ~200 processes across a 20 s window and made a filesystem check depend
+// on process-start latency.
+const POLL_INTERVAL_MS = 100;
+
+async function waitFor(predicate, timeoutMs, stillPending) {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    if (predicate()) {
+      return true;
+    }
+    if (Date.now() >= deadline) {
+      return !stillPending();
+    }
+    await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS));
+  }
 }
 
 // The standalone installer that includes the real chooser. `detectionLines`
@@ -361,6 +420,24 @@ function writeChooser(harnessCase, name, options) {
 function readMarker(directory, name) {
   const full = path.join(directory, name);
   return fs.existsSync(full) ? fs.readFileSync(full, "utf8") : null;
+}
+
+// NSIS finishes a directory removal just after the launched process can
+// return, so every absence assertion polls for a bounded window instead of
+// sampling once. Returns the first observed listing, or null once gone.
+async function waitUntilGone(target, timeoutMs = 20000) {
+  const deadline = Date.now() + timeoutMs;
+  let listing = null;
+  for (;;) {
+    if (!fs.existsSync(target)) {
+      return listing;
+    }
+    listing = fs.readdirSync(target);
+    if (Date.now() >= deadline) {
+      return listing;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 250));
+  }
 }
 
 const NOT_INSTALLED_DETECTION = (harnessCase) => [
@@ -517,6 +594,19 @@ test(
 
     const exitCode = await runInstaller(executable, ["/S"]);
     assert.equal(exitCode, 0, "the uninstall choice must exit cleanly");
+    // The %TEMP% copy is what records the command line, and it is what runs
+    // after the stub returns, so the log is polled rather than read.
+    assert.equal(
+      await waitFor(
+        () =>
+          readMarker(harnessCase.directory, "uninstaller-argv.log") !== null,
+        20000,
+        () =>
+          readMarker(harnessCase.directory, "uninstaller-argv.log") === null,
+      ),
+      true,
+      "the uninstall branch must launch the real uninstaller",
+    );
     const argv = readMarker(harnessCase.directory, "uninstaller-argv.log");
     assert.notEqual(
       argv,
@@ -528,9 +618,13 @@ test(
       !argv.includes("/KEEP_APP_DATA"),
       `a full uninstall must NOT pass /KEEP_APP_DATA; got ${JSON.stringify(argv)}`,
     );
+    // No `_?=` assertion here: NSIS strips that argument out of the parameter
+    // string the uninstaller sees, so it cannot be observed from this side. The
+    // residue case below is the guard - it fails on the in-place invocation.
+    // Polled, because the uninstall branch is now asynchronous.
     assert.equal(
-      fs.existsSync(harnessCase.machineRoot),
-      false,
+      await waitUntilGone(harnessCase.machineRoot),
+      null,
       "the ProgramData machine tree must be gone after a full uninstall",
     );
     assert.equal(
@@ -539,6 +633,95 @@ test(
       "the uninstall choice exits before the section continues",
     );
     assert.equal(fs.existsSync(argvLogPath), true);
+  },
+);
+
+test(
+  "the uninstall choice removes the whole install directory, the uninstaller stub included",
+  { skip: skipReason },
+  async (t) => {
+    // The regression guard for the residue real-machine QA found: launching
+    // the uninstaller with `_?=$INSTDIR` makes it run IN PLACE, Windows locks
+    // its own image, it cannot delete its stub, and the trailing
+    // `RMDir /r $INSTDIR` fails, leaving `Uninstall <app>.exe` in a directory
+    // the user was told uninstall removes
+    // (08-chooser-real-uninstall.log: residue ["Uninstall youtubetv-for-windows.exe"]
+    // on all 20 polls over 60 s).
+    const harnessCase = createCase(t, "residue");
+    populateTree(harnessCase.machineRoot, "residue");
+    // The application payload the uninstaller has to take with it, so "the
+    // directory is gone" cannot be satisfied by removing an empty folder.
+    fs.writeFileSync(
+      path.join(harnessCase.installDirectory, APP_EXE_NAME),
+      "app-payload",
+      "utf8",
+    );
+    const { argvLogPath, resolutionLogPath } =
+      installInnerUninstaller(harnessCase);
+    const executable = writeChooser(harnessCase, "residue", {
+      silent: true,
+      detectionLines: [
+        '!define YTVW_INSTALL_LOCATION "C:\\Program Files\\youtubetv-for-windows"',
+      ],
+      sectionLines: [
+        '  StrCpy $ytvwChoice "uninstall"',
+        "  Call ytvwChooserLeave",
+      ],
+    });
+
+    assert.equal(
+      await runInstaller(executable, ["/S"], 30000),
+      0,
+      "the uninstall choice must exit cleanly",
+    );
+    // The uninstaller that is launched WITHOUT `_?=` copies itself to %TEMP%
+    // and does the removal from there, so the stub returns before the removal
+    // finishes: poll, do not assert immediately.
+    assert.equal(
+      await waitForRemoval(harnessCase.installDirectory, 20000),
+      true,
+      `the install directory must be gone, the uninstaller stub included; residue: ${JSON.stringify(
+        fs.existsSync(harnessCase.installDirectory)
+          ? fs.readdirSync(harnessCase.installDirectory)
+          : [],
+      )}`,
+    );
+    assert.notEqual(
+      readMarker(harnessCase.directory, "uninstaller-argv.log"),
+      null,
+      "the uninstall branch must still launch the real uninstaller",
+    );
+    assert.equal(fs.existsSync(argvLogPath), true);
+    assert.equal(fs.existsSync(resolutionLogPath), true);
+    // The uninstaller ran from somewhere other than the install directory and
+    // still resolved the install directory correctly, which is why dropping
+    // `_?=` does not cost the uninstaller its target: NSIS hands the original
+    // directory to the %TEMP% copy, and the uninstaller's `un.onInit` ->
+    // `initMultiUser` -> `setInstallModePerAllUsers` re-reads
+    // `HKLM\Software\<guid>` `InstallLocation` on top of that.
+    const resolution = fs.readFileSync(resolutionLogPath, "utf8");
+    const resolved = /^EXEDIR=(.*) INSTDIR=(.*)$/.exec(resolution.trim());
+    assert.notEqual(
+      resolved,
+      null,
+      `the uninstaller must record where it ran and what it resolved; got ${JSON.stringify(resolution)}`,
+    );
+    const [, exedir, instdir] = resolved;
+    assert.equal(
+      path.resolve(instdir).toLowerCase(),
+      path.resolve(harnessCase.installDirectory).toLowerCase(),
+      `the uninstaller must resolve the real install directory; got ${JSON.stringify(resolution)}`,
+    );
+    assert.notEqual(
+      path.resolve(exedir).toLowerCase(),
+      path.resolve(harnessCase.installDirectory).toLowerCase(),
+      `the uninstaller must not have run in place (that is what left the stub behind); got ${JSON.stringify(resolution)}`,
+    );
+    assert.equal(
+      fs.existsSync(harnessCase.machineRoot),
+      false,
+      "the ProgramData machine tree must still be removed by the same run",
+    );
   },
 );
 
