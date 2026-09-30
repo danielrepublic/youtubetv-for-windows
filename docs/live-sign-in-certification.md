@@ -7,12 +7,13 @@ Status: RELEASE-BLOCKED
 - Gate: an ordinary Google account completes sign-in inside the app-owned child
   flow, and that session survives a full application relaunch in the same
   per-Windows-user persistent profile as the main window.
-- Blocking reason: the execution environment that implemented plan todo 4 has
-  no real Google account, no phone for the 2FA challenge, and no permission to
-  perform live sign-in against YouTube. Live sign-in is a maintainer-run gate;
-  this document records the honest block instead of a fabricated pass.
-- Blocked on: 2026-09-29 (plan todo 4 execution, `test: add sign-in feasibility
-gate and redacted diagnostics`).
+- Blocking reason: the execution environment that implemented todo 4 of the
+  `ps5-youtube-tv-windows` plan has no real Google account, no phone for the 2FA
+  challenge, and no permission to perform live sign-in against YouTube. Live
+  sign-in is a maintainer-run gate; this document records the honest block
+  instead of a fabricated pass.
+- Blocked on: 2026-09-29 (`ps5-youtube-tv-windows` plan todo 4 execution,
+  `test: add sign-in feasibility gate and redacted diagnostics`).
 - Unblock owner: the release maintainer holding the test account and phone.
 - Hard rule: a failed live sign-in is recorded as `release-blocked`. It is NEVER
   converted into a guest-mode pass. Guest viewing may remain a documented
@@ -104,7 +105,8 @@ Google account (2FA phone available), and a build of this repository.
    npm run build
    ```
 
-   An installed release (todo 7) works the same way; use its shortcut.
+   An installed release (`ps5-youtube-tv-windows` plan todo 7) works the same
+   way; use its shortcut.
 
 2. Enable diagnostics:
 
@@ -198,18 +200,19 @@ Google account (2FA phone available), and a build of this repository.
 
 ## Status history
 
-- 2026-09-29 — `release-blocked` (plan todo 4 execution). Reason: no real
-  Google account, phone, or live-sign-in permission in the execution
-  environment. No live sign-in was attempted; no pass is claimed. Unblocking
-  requires the procedure above to be executed by the release maintainer.
+- 2026-09-29 — `release-blocked` (`ps5-youtube-tv-windows` plan todo 4
+  execution). Reason: no real Google account, phone, or live-sign-in permission
+  in the execution environment. No live sign-in was attempted; no pass is
+  claimed. Unblocking requires the procedure above to be executed by the release
+  maintainer.
 
 ## Phone pairing follow-up (separate release gate)
 
 Same-Wi-Fi phone pairing and playback control are release-blocking
-compatibility criteria for this product (plan lines 92, 158, 161). Passing the
-sign-in gate above does NOT prove pairing. After sign-in certification, run a
-dedicated pairing check: with the phone on the same Wi-Fi network as the
-desktop, open YouTube on the phone, use its "Play on TV" / remote flow, and
-evidence (a) the desktop appearing as a selectable device, and (b) playback
-controlled from the phone. Record that evidence separately; this document
-covers sign-in and relaunch persistence only.
+compatibility criteria for this product (`ps5-youtube-tv-windows` plan lines 92,
+158, 161). Passing the sign-in gate above does NOT prove pairing. After
+sign-in certification, run a dedicated pairing check: with the phone on the same
+Wi-Fi network as the desktop, open YouTube on the phone, use its "Play on TV" /
+remote flow, and evidence (a) the desktop appearing as a selectable device, and
+(b) playback controlled from the phone. Record that evidence separately; this
+document covers sign-in and relaunch persistence only.

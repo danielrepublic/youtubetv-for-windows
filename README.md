@@ -130,7 +130,7 @@ youtubetv-for-windows 已安裝 / Already installed
 1. 到 `https://github.com/danielrepublic/youtubetv-for-windows/releases/latest` 下載最新的 `youtubetv-for-windows-<版本>-x64.exe`。
 2. 執行它。已經裝過的話，安裝程式會先問你要「重新安裝」還是「解除安裝」，見「已經安裝過：重新安裝、解除安裝或取消」。
 
-只要選「重新安裝」，`C:\ProgramData\youtubetv-for-windows` 整棵資料樹都不會被動，登入狀態會留著。
+只要選「重新安裝」，安裝程式本身不會刪除或改動 `C:\ProgramData\youtubetv-for-windows` 整棵資料樹裡的任何資料，你的設定檔與登入狀態都會原樣留著。安裝結束後如果程式被啟動，那是程式自己在跑，它會改寫自己的 Chromium 快取檔；那是程式的正常行為，不是安裝程式刪了資料。
 
 ### 解除安裝會刪掉什麼
 
@@ -288,7 +288,7 @@ There is only one way to get a new version, and it's a manual download:
 1. Go to `https://github.com/danielrepublic/youtubetv-for-windows/releases/latest` and grab the newest `youtubetv-for-windows-<version>-x64.exe`.
 2. Run it. If the app is already installed, the installer asks whether to reinstall or uninstall first; see "Already installed: reinstall, uninstall, or cancel".
 
-As long as you pick "Reinstall", the whole `C:\ProgramData\youtubetv-for-windows` tree is left alone and your sign-in state survives.
+As long as you pick "Reinstall", the installer itself deletes nothing in and changes no data anywhere under the `C:\ProgramData\youtubetv-for-windows` tree, and your settings and sign-in state survive it unchanged. If the app is launched afterwards, it rewrites its own Chromium cache files; that is the app's normal behaviour, not the installer deleting anything.
 
 ### What uninstall removes
 

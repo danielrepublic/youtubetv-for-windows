@@ -386,8 +386,8 @@
   ; Without the flag NSIS copies the uninstaller to %TEMP%\~nsuA.tmp, and the
   ; copy deletes the original stub and then the whole install directory.
   ;
-  ; THE INSTALL DIRECTORY STILL RESOLVES WITHOUT THE FLAG. Three independent
-  ; channels agree on the real directory:
+  ; THE INSTALL DIRECTORY STILL RESOLVES WITHOUT THE FLAG. Three channels
+  ; agree on the real directory, and they are not independent:
   ;   1. NSIS hands the original directory to the %TEMP% copy (measured: the
   ;      copy's $EXEDIR is the temp dir while $INSTDIR is the install dir);
   ;   2. the uninstaller's own `un.onInit` calls `initMultiUser`, and under
@@ -399,6 +399,15 @@
   ;      the uninstaller deletes only at the very end of its section.
   ; Channels 1 and 2 were both measured; the regression test asserts the
   ; observable consequence, that the install directory is gone.
+  ; PRECEDENCE: channel 2 is the authority, and it runs AFTER channel 1 rather
+  ; than beside it. `un.onInit` executes once NSIS has already pre-seeded
+  ; $INSTDIR for the %TEMP% copy, and `setInstallModePerAllUsers` OVERWRITES
+  ; that pre-seeded value whenever `InstallLocation` is non-empty - which it is
+  ; for as long as this install exists, per channel 3. So the registry channel
+  ; resolves the real $INSTDIR in BOTH flag states, which makes `_?=` a third,
+  ; redundant route to the same directory rather than the load-bearing one: it
+  ; was dropped for the residue reason above, not because anything depended on
+  ; it for the installer's target.
   ;
   ; THE RUN IS ASYNCHRONOUS. Without `_?=` the stub returns as soon as the
   ; %TEMP% copy is started, so the install directory can still exist for a
