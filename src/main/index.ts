@@ -7,12 +7,28 @@ import type { DialogPresenter } from "./dialogs.ts";
 import { activateProductionProfile } from "./profile-path.ts";
 import { IDENTITY_PARTITION } from "./session.ts";
 
+// The data-path redirect runs SYNCHRONOUSLY at module scope, before
+// app.whenReady() is ever awaited. Two different races are at stake, and
+// only the earlier one is safe:
+//
+//   * The first session access (session.fromPartition, any BrowserWindow) must
+//     not happen before the redirect, or the window is pinned to the default
+//     path.
+//   * Chromium's own service children snapshot the CURRENT userData value
+//     when each one is spawned, and Electron's documented requirement is that
+//     app.setPath runs before the `ready` event. Running the redirect inside
+//     bootstrap() lost that race: the GPU and network-service children were
+//     already up with the compiled-in default roaming path, and their
+//     graphics caches landed in %APPDATA%\%APPNAME% — a tree the uninstaller
+//     does not own and never removed.
+//
+// This must therefore stay at module top level and stay synchronous. Moving
+// it back inside bootstrap() reintroduces the residue; adding an await before
+// it does the same.
+const profile = activateProductionProfile(app);
+
 async function bootstrap(): Promise<void> {
   await app.whenReady();
-  // The profile directory must be fixed BEFORE the first session access
-  // below: app.setPath("sessionData", …) after the session exists leaves
-  // the window on the default path.
-  const profile = activateProductionProfile(app);
   // Opt-in lifecycle telemetry (docs/live-sign-in-certification.md). The
   // factory returns null — and nothing at all is wired — unless the
   // documented sentinel file exists next to the profile directory.
