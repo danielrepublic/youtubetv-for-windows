@@ -140,9 +140,31 @@
 ;   <machine root>\youtubetv-for-windows\users\<key>\{profile,userdata}
 ; (see src/main/profile-path.ts). The root is machine-wide under ProgramData,
 ; and the installer must BOTH create it and grant the local Users group
-; modify, because an elevated process creates a folder a standard user can
-; only read. The grant is done with icacls: electron-builder bundles nsExec
+; write access, because an elevated process creates a folder a standard user
+; can only read. The grant is done with icacls: electron-builder bundles nsExec
 ; but not AccessControl.dll.
+;
+; WHY AN EXPLICIT RIGHTS SET AND NOT THE SIMPLE RIGHT `M`: measured on this
+; machine, `icacls ... (OI)(CI)M` decodes to access mask 0x1301BF, and
+; 0x1301BF is 0x1FF minus 0x40 - FILE_DELETE_CHILD is NOT in it. A standard
+; user can create, write and delete a file, and can delete a subdirectory only
+; after emptying it, but cannot delete a child outright. The rights set below
+; decodes to 0x1301FF, which is exactly that mask plus 0x40, and icacls's own
+; renderer reduces it back to `(M,DC)`.
+;
+; WHY NOT THE SIMPLE RIGHT `F`: `F` decodes to 0x1F01FF, the full-access mask,
+; which carries WRITE_DAC (0x40000) and WRITE_OWNER (0x80000). Granting those
+; to the Users group would let any standard user rewrite the permissions on the
+; tree, which is exactly what this grant must never allow. The explicit set
+; below names every bit, so it also does not change meaning if a future
+; Windows maps the simple right `M` differently.
+;
+; SYNTAX, MEASURED NOT ASSUMED: icacls takes the advanced rights only as a
+; comma-separated list WRAPPED IN ITS OWN PARENTHESES. `(OI)(CI)(S,DE,...)` is
+; accepted; `(OI)(CI)M,DC` and a bare `(OI)(CI)DC` are both REJECTED with exit
+; code 87. The token list this machine's `icacls /?` documents is
+; `DE RC WDAC WO S AS MA GR GW GE GA RD WD AD REA WEA X DC RA WA`; the set
+; below deliberately uses none of WDAC, WO, MA, GR, GW, GE or GA.
 ;
 ; $PROGRAMDATA is not a built-in NSIS variable in this toolchain, so the
 ; environment is read at install time. `YTVW_MACHINE_ROOT`, when defined
@@ -184,12 +206,22 @@
 ; electron-builder hook: runs at the end of the install section, after all
 ; files/registry/shortcuts exist. It creates the machine-wide application data
 ; root under ProgramData and grants the local Users group (SID S-1-5-32-545)
-; modify with object+container inheritance on the whole tree
-; (`/grant *S-1-5-32-545:(OI)(CI)M /T /C /L`). A failed create/grant aborts the
-; install with a bilingual message; `/SD IDOK` keeps silent installs
-; non-blocking (the message is skipped there and only the nonzero exit
-; reports). Registers: $0 base root, $1 machine root, $2 failure reason or
-; icacls exit code, $3 captured icacls output, $4 the icacls executable.
+; the explicit rights set below, with object+container inheritance, on the
+; whole tree:
+;
+;   /grant *S-1-5-32-545:(OI)(CI)(S,DE,RC,RD,WD,AD,REA,WEA,X,DC,RA,WA) /T /C /L
+;
+; Measured on this machine, that set decodes to access mask 0x1301FF: the
+; Modify set 0x1301BF plus FILE_DELETE_CHILD (0x40), with WRITE_DAC (0x40000),
+; WRITE_OWNER (0x80000) and GENERIC_ALL (0x10000000) all clear. icacls
+; re-renders the ACE as `(OI)(CI)(M,DC)`, which is the cross-check that the set
+; really is "Modify plus delete-child and nothing else".
+;
+; A failed create/grant aborts the install with a bilingual message; `/SD IDOK`
+; keeps silent installs non-blocking (the message is skipped there and only the
+; nonzero exit reports). Registers: $0 base root, $1 machine root, $2 failure
+; reason or icacls exit code, $3 captured icacls output, $4 the icacls
+; executable.
 ; ---------------------------------------------------------------------------
 !macro customInstall
   !ifdef YTVW_MACHINE_ROOT
@@ -216,7 +248,7 @@
       ; create failure is caught here instead of from icacls.
       StrCpy $2 "cannot create root"
     ${Else}
-      nsExec::ExecToStack '"$4" "$1" /grant *S-1-5-32-545:(OI)(CI)M /T /C /L'
+      nsExec::ExecToStack '"$4" "$1" /grant *S-1-5-32-545:(OI)(CI)(S,DE,RC,RD,WD,AD,REA,WEA,X,DC,RA,WA) /T /C /L'
       Pop $2 ; nsExec return value: the icacls exit code
       Pop $3 ; captured output (unused)
     ${EndIf}

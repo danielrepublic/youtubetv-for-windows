@@ -25,7 +25,9 @@
 //   - the real define set compiles under -WX (electron-builder passes
 //     warningsAsErrors), including the path with no `YTVW_*` override at all;
 //   - the hook creates the root and leaves the local Users group a
-//     non-inherited `(OI)(CI)(M)` grant on it;
+//     non-inherited `(OI)(CI)` grant on it whose DECODED access mask is the
+//     Modify set plus FILE_DELETE_CHILD, and carries neither WRITE_DAC nor
+//     WRITE_OWNER nor GENERIC_ALL;
 //   - a non-directory root, a failing grant, and a missing ProgramData each
 //     abort the install (a silent install exits nonzero) instead of
 //     continuing with an unusable or drive-relative path.
@@ -46,10 +48,32 @@ const repositoryRoot = path.resolve(
 const includePath = path.join(repositoryRoot, "build", "nsis.include");
 const machineDirName = "youtubetv-for-windows";
 
-// NSIS's default user group for the grant. icacls renders it as the
-// well-known English name, but the SID form is accepted too so the assertion
-// does not depend on the machine's locale.
-const USERS_GRANT = "(OI)(CI)(M)";
+// The grant target. The local Users group is addressed by SID, not by name,
+// so the assertion does not depend on the machine's locale.
+const USERS_SID_ALIASES = ["BU", "S-1-5-32-545"];
+
+// The suite asserts on the DECODED NUMERIC access mask rather than on icacls's
+// printed letters, because the printed letters are exactly what hid the
+// defect: icacls renders the Modify set as the single token `(M)`, and the
+// letters cannot show that FILE_DELETE_CHILD is missing from it.
+//
+// Both numbers below were MEASURED on this machine by decoding the SDDL of a
+// real `icacls /grant` (see
+// release-evidence/installer-mode/todo13-real/run-20260930-194510-acl-delete-child/01-icacls-syntax-measurement-temp.log):
+//
+//   icacls /grant *S-1-5-32-545:(OI)(CI)M           -> 0x1301BF
+//   icacls /grant *S-1-5-32-545:(OI)(CI)(...,DC,..) -> 0x1301FF
+//   icacls /grant *S-1-5-32-545:(OI)(CI)F           -> 0x1F01FF
+//
+// 0x1301BF is 0x1FF minus 0x40, so the pre-change grant did NOT include
+// FILE_DELETE_CHILD. 0x1301FF is 0x1301BF plus exactly 0x40. 0x1F01FF is the
+// full-access mask and carries WRITE_DAC and WRITE_OWNER, which is why the
+// grant must never be widened to the simple right `F`.
+const MODIFY_MASK = 0x1301bf;
+const FILE_DELETE_CHILD = 0x00000040;
+const WRITE_DAC = 0x00040000;
+const WRITE_OWNER = 0x00080000;
+const GENERIC_ALL = 0x10000000;
 
 function findMakensis() {
   const candidates = [];
@@ -241,11 +265,15 @@ function machineRootOf(base) {
 // icacls prints one ACE per line, prefixed by the file name on the FIRST line
 // only, so that prefix has to come off before the entries can be compared. A
 // granted (not inherited) Users entry then looks like:
-//   BUILTIN\Users:(OI)(CI)(M)
+//   BUILTIN\Users:(OI)(CI)(M,DC)
 // The leading (I) on an inherited entry is what tells the two apart, so the
 // pattern is anchored on the whole entry rather than a substring search.
+//
+// The printed form is kept as a SECONDARY check only. The authoritative
+// assertion is the decoded numeric mask below, because `(M)` and `(M,DC)` look
+// almost the same and only the decode settles whether delete-child is there.
 const usersGrantPattern = new RegExp(
-  "^(?:BUILTIN\\\\Users|\\*S-1-5-32-545):\\(OI\\)\\(CI\\)\\(M\\)$",
+  "^(?:BUILTIN\\\\Users|\\*S-1-5-32-545):\\(OI\\)\\(CI\\)\\(M,DC\\)$",
 );
 
 function readAclEntries(target) {
@@ -275,12 +303,178 @@ function readAclEntries(target) {
     );
 }
 
-function assertUsersModifyGrant(target) {
+// SDDL writes a numeric access mask with a "0x" prefix but writes an
+// all-access ACE as the symbolic token "FA" - and "FA" is also a valid hex
+// string, so the prefix and the symbolic table are both tested BEFORE hex or
+// an all-access ACE silently decodes as 0x000000FA.
+const SDDL_SYMBOLIC_RIGHTS = { FA: 0x1f01ff, FR: 0x1200a9, FW: 0x120116 };
+
+function readSddl(target) {
+  const result = spawnSync(
+    path.join(
+      process.env.SystemRoot ?? "C:\\Windows",
+      "System32",
+      "WindowsPowerShell",
+      "v1.0",
+      "powershell.exe",
+    ),
+    [
+      "-NoProfile",
+      "-NonInteractive",
+      "-Command",
+      `(Get-Acl -LiteralPath '${target.replace(/'/g, "''")}').Sddl`,
+    ],
+    { windowsHide: true, encoding: "utf8" },
+  );
+  assert.equal(
+    result.status,
+    0,
+    `Get-Acl failed on ${target}: ${result.stderr}`,
+  );
+  const sddl = result.stdout.trim();
+  assert.notEqual(sddl, "", `Get-Acl returned an empty SDDL for ${target}`);
+  return sddl;
+}
+
+// An SDDL ACE is `type;flags;rights;objectType;inheritedObjectType;SID`.
+function parseAces(sddl) {
+  const start = sddl.indexOf("(");
+  assert.notEqual(start, -1, `no DACL in SDDL: ${sddl}`);
+  return (sddl.slice(start).match(/\(([^)]*)\)/g) ?? []).map((ace) =>
+    ace.slice(1, -1).split(";"),
+  );
+}
+
+function rightsTokenToMask(rights) {
+  if (/^0x[0-9a-fA-F]+$/.test(rights)) {
+    return parseInt(rights.slice(2), 16) >>> 0;
+  }
+  const symbolic = SDDL_SYMBOLIC_RIGHTS[rights.toUpperCase()];
+  if (symbolic !== undefined) {
+    return symbolic;
+  }
+  if (/^[0-9a-fA-F]+$/.test(rights)) {
+    return parseInt(rights, 16) >>> 0;
+  }
+  return null;
+}
+
+// The granted (non-inherited) Users ACE, with its access mask resolved to the
+// file-specific bits the object manager enforces. Returns null when there is
+// no such ACE, so the caller can fail with a readable message.
+function readGrantedUsersAce(target) {
+  const sddl = readSddl(target);
+  for (const [type, flags, rights, , , sid] of parseAces(sddl)) {
+    if (type !== "A" || !USERS_SID_ALIASES.includes(sid)) {
+      continue;
+    }
+    // An INHERITED ACE carries the "ID" flag. The inheritance flags "OI" and
+    // "CI" also contain the letter I, so testing for a bare "I" would reject
+    // every granted ACE as well as the inherited ones.
+    if (flags.includes("ID")) {
+      continue;
+    }
+    let mask = rightsTokenToMask(rights);
+    if (mask === null) {
+      continue;
+    }
+    // Resolve any generic bit the ACE carries to the file-specific bits it
+    // maps to, so a GENERIC_* grant cannot hide inside the mask.
+    if (flags.includes("GA")) {
+      mask |= 0x1f01ff;
+    }
+    if (flags.includes("GW")) {
+      mask |= 0x120116;
+    }
+    if (flags.includes("GR")) {
+      mask |= 0x120089;
+    }
+    if (flags.includes("GX")) {
+      mask |= 0x1200a0;
+    }
+    return {
+      sddl,
+      flags,
+      rights,
+      mask,
+      ace: `${type};${flags};${rights};;;${sid}`,
+    };
+  }
+  return { sddl, ace: null, mask: null, flags: null, rights: null };
+}
+
+function hex(mask) {
+  return `0x${mask.toString(16).toUpperCase()}`;
+}
+
+function assertUsersDeleteChildGrant(target) {
+  const ace = readGrantedUsersAce(target);
+  assert.notEqual(
+    ace.mask,
+    null,
+    `the local Users group must hold a non-inherited grant on ${target}; ` +
+      `SDDL: ${ace.sddl}`,
+  );
+  assert.ok(
+    ace.flags.includes("OI") && ace.flags.includes("CI"),
+    `the Users grant must inherit to objects and containers so the whole tree ` +
+      `is writable; flags "${ace.flags}" on ${target}`,
+  );
+
+  // The pre-change grant was 0x1301BF, which is exactly Modify minus
+  // FILE_DELETE_CHILD. Asserting the superset relationship keeps every right
+  // the Modify grant gave (create, write, read, delete, attributes) while
+  // requiring delete-child on top.
+  const missing = MODIFY_MASK & ~ace.mask;
+  assert.equal(
+    missing,
+    0,
+    `the Users grant must be a superset of the Modify set ${hex(
+      MODIFY_MASK,
+    )}; granted ${hex(ace.mask)} is missing ${hex(missing)} on ${target}`,
+  );
+
+  assert.equal(
+    (ace.mask & FILE_DELETE_CHILD) !== 0,
+    true,
+    `FILE_DELETE_CHILD (0x40) must be granted or a standard user cannot delete ` +
+      `a child of the data root outright; granted mask ${hex(ace.mask)} on ` +
+      `${target} from ACE (${ace.ace})`,
+  );
+
+  for (const [bit, name] of [
+    [WRITE_DAC, "WRITE_DAC"],
+    [WRITE_OWNER, "WRITE_OWNER"],
+    [GENERIC_ALL, "GENERIC_ALL"],
+  ]) {
+    assert.equal(
+      (ace.mask & bit) === 0,
+      true,
+      `the Users grant must NOT include ${name} (${hex(bit)}): a standard ` +
+        `user holding it could rewrite the permissions on the data root; ` +
+        `granted mask ${hex(ace.mask)} on ${target} from ACE (${ace.ace})`,
+    );
+  }
+
+  // The exact mask is pinned so a later widening (the simple right `F` decodes
+  // to 0x1F01FF) fails here rather than passing the subset checks above.
+  assert.equal(
+    ace.mask,
+    MODIFY_MASK | FILE_DELETE_CHILD,
+    `the Users grant must be exactly Modify plus delete-child ` +
+      `(${hex(MODIFY_MASK | FILE_DELETE_CHILD)}); granted ${hex(ace.mask)} on ` +
+      `${target} from ACE (${ace.ace})`,
+  );
+
+  // Secondary, text-level: icacls's own re-render of the granted set. This is
+  // the shape a human reads in a bug report, so it is pinned too - but on its
+  // own it could not have caught the original defect.
   const entries = readAclEntries(target);
   assert.ok(
     entries.some((line) => usersGrantPattern.test(line)),
-    `the local Users group must hold a non-inherited ${USERS_GRANT} grant on ${target}; got:\n${entries.join("\n")}`,
+    `icacls must re-render the Users grant as "(OI)(CI)(M,DC)"; got:\n${entries.join("\n")}`,
   );
+  return ace;
 }
 
 test(
@@ -307,7 +501,7 @@ test(
 );
 
 test(
-  "the install hook creates the machine root and grants the Users group modify",
+  "the install hook creates the machine root and grants the Users group modify plus delete-child",
   { skip: skipReason },
   async (t) => {
     const directory = createCase(t, "grant");
@@ -345,7 +539,12 @@ test(
       fs.statSync(machineRoot).isDirectory(),
       `the machine root must exist: ${machineRoot}`,
     );
-    assertUsersModifyGrant(machineRoot);
+    const ace = assertUsersDeleteChildGrant(machineRoot);
+    t.diagnostic(
+      `Users grant on the machine root: ACE (${ace.ace}) decoded ${hex(ace.mask)} ` +
+        `= ${hex(MODIFY_MASK)} (Modify) | 0x${FILE_DELETE_CHILD.toString(16)} (FILE_DELETE_CHILD); ` +
+        `WRITE_DAC clear, WRITE_OWNER clear, GENERIC_ALL clear`,
+    );
   },
 );
 
