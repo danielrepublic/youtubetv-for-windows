@@ -582,41 +582,55 @@
 ; catastrophic bug, not a style issue. Skipping matches the required
 ; missing-tree no-op: there is no addressable machine tree to remove.
 ;
-; LOCK FAILURE: after `RMDir /r`, any surviving file under the data tree
-; means a handle is still open (the app did not shut down, or a lock
-; survived it). The uninstaller then shows the bilingual failure (`/SD IDOK`
-; keeps silent uninstalls non-blocking: the message is skipped there and
-; only the nonzero exit reports) and aborts instead of silently leaving
-; credentials behind. Re-running the uninstaller after closing the app
-; completes the removal.
+; REMOVAL MECHANISM: the removal below is `un.YTVWRemoveDataTree` from
+; build/nsis-safe-delete.nsh, not a path-based recursive delete. Nothing is
+; removed by name. Every object is reached through a HANDLE opened with
+; FILE_FLAG_OPEN_REPARSE_POINT, its kind is read from
+; `GetFileInformationByHandle` on that handle, and it is disposed with
+; `SetFileInformationByHandle(FileDispositionInfo)` while that handle is still
+; open. `DeleteFile`, `RMDir` and `Remove-Item` are never used, because all
+; three resolve the name themselves.
 ;
-; OPEN SECURITY QUESTION, NOT MITIGATED, NEEDS AN OWNER DECISION. The `RMDir /r`
-; below FOLLOWS DIRECTORY JUNCTIONS in this toolchain, and any member of
-; BUILTIN\Users can plant one inside this tree with no special privilege
-; (`mklink /J` needs none), because the data root is writable by design. The
-; elevated uninstaller then recurses through the link and deletes the target's
-; contents.
+; REPARSE POINTS ARE DELETED AS LINKS AND NEVER FOLLOWED. A junction, a
+; symbolic link or a mount point found anywhere under the data tree is a
+; leaf: it is disposed as itself and is never enumerated, so nothing outside
+; the tree can be reached through it. This is the defect the previous
+; `RMDir /r` had, read off the NSIS source rather than inferred: `RMDir`
+; dispatches to `myDelete` (Source/exehead/exec.c:642-649), whose walk
+; classifies each child with `fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY`
+; (Source/exehead/util.c:229) and recurses on a match (util.c:234) without ever
+; testing `FILE_ATTRIBUTE_REPARSE_POINT` (0x400). A junction reports both
+; bits, so it was taken for a plain subdirectory and the walk enumerated the
+; TARGET's children. `RMDir` accepts only `/r` and `/REBOOTOK`
+; (Source/script.cpp:3596-3617), so no switch avoids it, and `myDelete` is
+; byte-identical between upstream v304 and current master. The blast radius
+; was real: any member of BUILTIN\Users could plant a junction with no special
+; privilege (`mklink /J` needs none) because the data root is writable by
+; design, and reverting the Users grant does not help, because the Modify set
+; already carries FILE_ADD_SUBDIRECTORY.
 ;
-; CONFIRMED FROM THE NSIS SOURCE, not inferred: `RMDir` dispatches to `myDelete`
-; (Source/exehead/exec.c:642-649), whose recursive walk classifies each child
-; with `fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY` (Source/exehead/util.c:229)
-; and recurses on a match (util.c:234). `FILE_ATTRIBUTE_REPARSE_POINT` (0x400) is
-; never tested. A junction reports both bits, so it is taken for a plain
-; subdirectory and the walk enumerates the TARGET's children. `RMDir` accepts
-; only `/r` and `/REBOOTOK` (Source/script.cpp:3596-3617), so there is no switch
-; that avoids this. This is not specific to one makensis build: `myDelete` is
-; byte-identical between upstream v304 and current master.
+; ANCESTORS ARE REFUSED, NEVER DELETED. Every component from the drive root
+; through the data root's parent is opened no-follow, must report
+; FILE_ATTRIBUTE_DIRECTORY without FILE_ATTRIBUTE_REPARSE_POINT, and is held
+; open for the whole walk, so no name is re-resolved while one of its
+; components could be swapped underneath it. Those handles are opened for
+; PINNING ONLY and are never disposed, so `C:\ProgramData` itself survives
+; even when the data root is something below it. An ancestor that IS a
+; reparse point is therefore a REFUSAL: the uninstaller reports it and aborts
+; rather than descending through it.
 ;
-; WHY NOTHING WAS CHANGED HERE. The candidates that work are a rewrite of this
-; macro's removal into a script that refuses to descend into reparse points, or
-; a pre-flight check that refuses to uninstall at all when one is present. Both
-; are design decisions with product consequences, and the plan records this
-; question as outside its own scope. Note also that reverting the Users grant
-; does NOT mitigate it: the Modify set already carries FILE_ADD_SUBDIRECTORY,
-; so a standard user can create a junction with or without FILE_DELETE_CHILD.
+; FAILURE. A malformed root, a refused ancestor, a file that survived because
+; a handle is still open (the app did not shut down, or a lock survived it), or
+; any other unexpected condition stops the walk and records the reason. The
+; uninstaller then shows the bilingual failure below (`/SD IDOK` keeps silent
+; uninstalls non-blocking: the message is skipped there and only the nonzero
+; exit reports) and aborts, instead of silently leaving credentials behind or
+; reporting a partial removal as success. Re-running the uninstaller after
+; closing the app completes the removal. The only tolerated outcomes are a
+; clean removal and an absent tree (an absent drive, parent, or data root is
+; a no-op, exit 0).
 ;
-; Full determination, blast radius and the six candidate mitigations with their
-; trade-offs:
+; Full determination and blast radius:
 ; release-evidence/installer-mode/todo13-real/run-20260930-221942-acl-grant-control/02-junction-escalation-rmdir-reparse.log
 ;
 ; ENCODING: this file is UTF-8 WITH BOM (EF BB BF). makensis reads a
@@ -633,6 +647,11 @@
   !define YTVW_MACHINE_DIR_NAME "youtubetv-for-windows"
 !endif
 
+; The handle-pinned, reparse-safe removal itself. It lives in its own file so
+; this include keeps only the uninstaller hooks and the wiring, and so the
+; removal can be read and reviewed on its own.
+!include "nsis-safe-delete.nsh"
+
 Var ytvwUnParameters
 Var ytvwUnKeepFlag
 Var ytvwUnBase
@@ -642,10 +661,12 @@ Var ytvwUnRoot
 ; YTVW_REMOVE_DATA_DIRECTORY
 ;   Removes the whole machine data tree, except on the upgrade path
 ;   (`/KEEP_APP_DATA` on the uninstaller command line), where it returns
-;   without touching the tree. On a lock failure it reports bilingually and
-;   aborts the uninstall with a nonzero exit.
+;   without touching the tree. A malformed root, a refused ancestor, or a
+;   lock that leaves anything behind reports bilingually and aborts the
+;   uninstall with a nonzero exit; an absent tree is a silent no-op.
 ;   Registers: $ytvwUnParameters command line, $ytvwUnKeepFlag flag value,
-;   $ytvwUnBase resolved base, $ytvwUnRoot machine root.
+;   $ytvwUnBase resolved base, $ytvwUnRoot machine root. Reads
+;   $ytvwSafeFailure, which nsis-safe-delete.nsh owns.
 ; ---------------------------------------------------------------------------
 !macro YTVW_REMOVE_DATA_DIRECTORY
   ${GetParameters} $ytvwUnParameters
@@ -675,8 +696,19 @@ Var ytvwUnRoot
   ${EndIf}
   StrCpy $ytvwUnRoot "$ytvwUnBase\${YTVW_MACHINE_DIR_NAME}"
   ClearErrors
-  RMDir /r "$ytvwUnRoot"
-  ClearErrors
+  ; Called as a Function rather than inserted as a macro so the call site is
+  ; the one thing the packaging contract pins. NSIS's `Call` takes no
+  ; arguments, so the tree is pushed and the callee consumes it. The removal
+  ; reports through `$ytvwSafeFailure`, which stays empty both on a clean
+  ; removal and on an absent tree, so an absent tree remains a no-op.
+  Push "$ytvwUnRoot"
+  Call un.YTVWRemoveDataTree
+  ${If} $ytvwSafeFailure != ""
+    Goto ytvwUnRemoveFailed
+  ${EndIf}
+  ; Net under the same contract as the walk: anything still under the root
+  ; means the removal did not complete, whatever the walk reported.
+  IfFileExists "$ytvwUnRoot\*" ytvwUnRemoveFailed
   IfFileExists "$ytvwUnRoot\*.*" ytvwUnRemoveFailed ytvwUnRemoveDone
   ytvwUnRemoveFailed:
   MessageBox MB_OK|MB_ICONEXCLAMATION "無法移除設定檔與應用程式資料，請先關閉應用程式後再執行解除安裝。$\r$\nThe profile and application data could not be removed. Close the app and run the uninstaller again.$\r$\n($ytvwUnRoot)" /SD IDOK

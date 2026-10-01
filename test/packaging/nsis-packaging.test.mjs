@@ -180,13 +180,35 @@ test("the uninstaller half removes exactly the ProgramData machine tree", () => 
   assert.match(source, /!macro customUnInstall/);
   assert.match(source, /!macro YTVW_REMOVE_DATA_DIRECTORY/);
   assert.match(source, /\/KEEP_APP_DATA/);
-  assert.match(source, /RMDir \/r/);
   assert.ok(
     source.includes(PROFILE_DIRECTORY_NAME),
     `the include must name the machine directory "${PROFILE_DIRECTORY_NAME}" from profile-path.ts`,
   );
-  const uninstallHalf = source.slice(
-    source.indexOf("!ifdef BUILD_UNINSTALLER"),
+  const uninstallStart = source.search(/^!ifdef BUILD_UNINSTALLER\s*$/m);
+  assert.ok(uninstallStart >= 0, "the real uninstaller build guard must exist");
+  const uninstallHalf = source.slice(uninstallStart);
+  const uninstallCode = uninstallHalf.replace(/\/\*[\s\S]*?\*\//g, "");
+  assert.doesNotMatch(
+    uninstallCode,
+    /^[\t ]*RMDir[\t ]+[^;\r\n]*\/r(?:[\t ;]|$)/im,
+    "data removal must not execute RMDir /r, which follows directory junctions",
+  );
+  assert.match(
+    uninstallCode,
+    /^[\t ]*!include[\t ]+"[^"\r\n]*\bnsis-safe-delete\.nsh"/m,
+    "the uninstaller must include build/nsis-safe-delete.nsh",
+  );
+  const removeMacro = uninstallCode.match(
+    /^[\t ]*!macro YTVW_REMOVE_DATA_DIRECTORY[\t ]*\r?\n([\s\S]*?)^[\t ]*!macroend\b/m,
+  );
+  assert.ok(
+    removeMacro,
+    "the data-removal macro must exist in the uninstaller",
+  );
+  assert.match(
+    removeMacro[1],
+    /^[\t ]*Call[\t ]+un\.YTVWRemoveDataTree(?:[\t ;]|$)/m,
+    "data removal must call the public safe-delete wrapper un.YTVWRemoveDataTree",
   );
   assert.match(
     uninstallHalf,
@@ -224,9 +246,9 @@ test("a locked profile fails bilingually instead of silently", () => {
     "the lock failure must carry the English message",
   );
   assert.match(source, /\/SD IDOK/);
-  const uninstallHalf = source.slice(
-    source.indexOf("!ifdef BUILD_UNINSTALLER"),
-  );
+  const uninstallStart = source.search(/^!ifdef BUILD_UNINSTALLER\s*$/m);
+  assert.ok(uninstallStart >= 0, "the real uninstaller build guard must exist");
+  const uninstallHalf = source.slice(uninstallStart);
   assert.match(uninstallHalf, /Abort/);
 });
 

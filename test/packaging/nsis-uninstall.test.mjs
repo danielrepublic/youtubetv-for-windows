@@ -200,7 +200,11 @@ function createCase(t, name, options) {
   const directory = fs.mkdtempSync(
     path.join(os.tmpdir(), `ytvw-uninst-${name}-`),
   );
-  t.after(() => {
+  const cleanup = [];
+  t.after(async () => {
+    for (const action of [...cleanup].reverse()) {
+      await action();
+    }
     fs.rmSync(directory, { recursive: true, force: true });
   });
   const machineBase = path.join(directory, "machine-base");
@@ -211,6 +215,7 @@ function createCase(t, name, options) {
   );
   compile(path.join(directory, "harness.nsi"));
   return {
+    cleanup,
     directory,
     harness: path.join(directory, "uninstall-harness.exe"),
     uninstaller: path.join(directory, "inner-uninstaller.exe"),
@@ -221,6 +226,8 @@ function createCase(t, name, options) {
 
 function populateTree(machineRoot, prefix) {
   const files = {
+    __ytvw_safe_delete_end_of_list__: `${prefix}-sentinel-named-file`,
+    "users\\__ytvw_safe_delete_end_of_list__\\profile\\Cookies": `${prefix}-sentinel-named-directory`,
     [`users\\${USER_KEY_A}\\profile\\Cookies`]: `${prefix}-cookie-bytes`,
     [`users\\${USER_KEY_A}\\profile\\Preferences`]: `${prefix}-{}`,
     [`users\\${USER_KEY_A}\\userdata\\Local State`]: `${prefix}-local-state`,
@@ -252,6 +259,33 @@ function snapshotTree(machineRoot) {
   };
   walk(machineRoot);
   return entries.sort((a, b) => (a.relative < b.relative ? -1 : 1));
+}
+
+function registerJunctionCleanup(harnessCase, junctions, victimRoots = []) {
+  harnessCase.cleanup.push(() => {
+    for (const junction of [...junctions].reverse()) {
+      if (fs.lstatSync(junction, { throwIfNoEntry: false })?.isSymbolicLink()) {
+        fs.unlinkSync(junction);
+      }
+    }
+    for (const victimRoot of victimRoots) {
+      fs.rmSync(victimRoot, { recursive: true, force: true });
+    }
+  });
+}
+
+function createJunction(link, target) {
+  assert.equal(
+    fs.existsSync(path.dirname(link)),
+    true,
+    `junction parent must exist before creation: ${path.dirname(link)}`,
+  );
+  assert.equal(
+    fs.existsSync(target),
+    true,
+    `junction target must exist before creation: ${target}`,
+  );
+  fs.symlinkSync(target, link, "junction");
 }
 
 test(
@@ -312,11 +346,16 @@ test(
       ],
       { windowsHide: true, stdio: "ignore" },
     );
-    t.after(() => {
+    const holderClosed = new Promise((resolve, reject) => {
+      holder.once("close", resolve);
+      holder.once("error", reject);
+    });
+    harnessCase.cleanup.push(async () => {
       spawnSync("taskkill", ["/pid", String(holder.pid), "/T", "/F"], {
         windowsHide: true,
         stdio: "ignore",
       });
+      await holderClosed;
     });
     await new Promise((resolve) => {
       setTimeout(resolve, 1500);
@@ -347,6 +386,7 @@ test(
       windowsHide: true,
       stdio: "ignore",
     });
+    await holderClosed;
   },
 );
 
@@ -375,6 +415,161 @@ test(
       snapshotTree(harnessCase.machineRoot),
       before,
       "a blank base must skip the removal instead of deleting drive-relatively",
+    );
+  },
+);
+
+test(
+  "a nested data junction is removed without mutating its external victim",
+  { skip: skipReason },
+  async (t) => {
+    const harnessCase = createCase(t, "junction-nested");
+    const victimRoot = fs.mkdtempSync(
+      path.join(os.tmpdir(), "ytvw-uninst-junction-victim-"),
+    );
+    const victimFile = path.join(victimRoot, "Cookies");
+    const victimBytes = "nested-junction-victim-bytes";
+    fs.writeFileSync(victimFile, victimBytes, "utf8");
+    const junction = path.join(
+      harnessCase.machineRoot,
+      "users",
+      USER_KEY_A,
+      "profile",
+    );
+    fs.mkdirSync(path.dirname(junction), { recursive: true });
+    registerJunctionCleanup(harnessCase, [junction], [victimRoot]);
+    createJunction(junction, victimRoot);
+
+    const exitCode = await runUninstaller(harnessCase, []);
+    assert.equal(
+      fs.existsSync(victimFile),
+      true,
+      "nested junction victim file must remain present",
+    );
+    assert.equal(
+      fs.readFileSync(victimFile, "utf8"),
+      victimBytes,
+      "nested junction victim bytes must remain unchanged",
+    );
+    assert.equal(exitCode, 0, "nested junction removal must succeed");
+    assert.equal(
+      fs.lstatSync(junction, { throwIfNoEntry: false }),
+      undefined,
+      "the nested data junction must be removed",
+    );
+  },
+);
+
+test(
+  "a root junction is removed without mutating its external victim",
+  { skip: skipReason },
+  async (t) => {
+    const harnessCase = createCase(t, "junction-root");
+    const victimRoot = fs.mkdtempSync(
+      path.join(os.tmpdir(), "ytvw-uninst-root-junction-victim-"),
+    );
+    const victimFile = path.join(victimRoot, "profile-bytes");
+    const victimBytes = "root-junction-victim-bytes";
+    fs.writeFileSync(victimFile, victimBytes, "utf8");
+    fs.mkdirSync(harnessCase.machineBase, { recursive: true });
+    registerJunctionCleanup(
+      harnessCase,
+      [harnessCase.machineRoot],
+      [victimRoot],
+    );
+    createJunction(harnessCase.machineRoot, victimRoot);
+
+    const exitCode = await runUninstaller(harnessCase, []);
+    assert.equal(
+      fs.existsSync(victimFile),
+      true,
+      "root junction victim file must remain present",
+    );
+    assert.equal(
+      fs.readFileSync(victimFile, "utf8"),
+      victimBytes,
+      "root junction victim bytes must remain unchanged",
+    );
+    assert.equal(exitCode, 0, "root junction removal must succeed");
+    assert.equal(
+      fs.lstatSync(harnessCase.machineRoot, { throwIfNoEntry: false }),
+      undefined,
+      "the root junction must be removed",
+    );
+  },
+);
+
+test(
+  "KEEP_APP_DATA leaves a nested junction and its external victim untouched",
+  { skip: skipReason },
+  async (t) => {
+    const harnessCase = createCase(t, "junction-keep");
+    const victimRoot = fs.mkdtempSync(
+      path.join(os.tmpdir(), "ytvw-uninst-keep-junction-victim-"),
+    );
+    const victimFile = path.join(victimRoot, "Cookies");
+    const victimBytes = "keep-junction-victim-bytes";
+    fs.writeFileSync(victimFile, victimBytes, "utf8");
+    const junction = path.join(
+      harnessCase.machineRoot,
+      "users",
+      USER_KEY_A,
+      "profile",
+    );
+    fs.mkdirSync(path.dirname(junction), { recursive: true });
+    registerJunctionCleanup(harnessCase, [junction], [victimRoot]);
+    createJunction(junction, victimRoot);
+
+    const exitCode = await runUninstaller(harnessCase, ["/KEEP_APP_DATA"]);
+    assert.equal(
+      fs.existsSync(victimFile),
+      true,
+      "KEEP_APP_DATA junction victim file must remain present",
+    );
+    assert.equal(
+      fs.readFileSync(victimFile, "utf8"),
+      victimBytes,
+      "KEEP_APP_DATA junction victim bytes must remain unchanged",
+    );
+    assert.equal(exitCode, 0, "KEEP_APP_DATA must succeed");
+    assert.equal(
+      fs.lstatSync(junction).isSymbolicLink(),
+      true,
+      "KEEP_APP_DATA must leave the data junction untouched",
+    );
+  },
+);
+
+test(
+  "an ancestor base junction cannot make uninstall mutate its external victim",
+  { skip: skipReason },
+  async (t) => {
+    const harnessCase = createCase(t, "junction-base");
+    const victimBase = fs.mkdtempSync(
+      path.join(os.tmpdir(), "ytvw-uninst-base-junction-victim-"),
+    );
+    const victimMachineRoot = path.join(victimBase, MACHINE_DIR_NAME);
+    const victimFile = path.join(victimMachineRoot, "sentinel-bytes");
+    const victimBytes = "base-junction-victim-bytes";
+    fs.mkdirSync(path.dirname(victimFile), { recursive: true });
+    fs.writeFileSync(victimFile, victimBytes, "utf8");
+    registerJunctionCleanup(
+      harnessCase,
+      [harnessCase.machineBase],
+      [victimBase],
+    );
+    createJunction(harnessCase.machineBase, victimBase);
+
+    await runUninstaller(harnessCase, []);
+    assert.equal(
+      fs.existsSync(victimFile),
+      true,
+      "ancestor base junction victim file must remain present",
+    );
+    assert.equal(
+      fs.readFileSync(victimFile, "utf8"),
+      victimBytes,
+      "ancestor base junction victim bytes must remain unchanged",
     );
   },
 );
