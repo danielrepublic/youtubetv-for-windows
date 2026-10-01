@@ -141,7 +141,7 @@ function recordOf(records, event) {
   return found;
 }
 
-test("the fixture server sees the fixed PS4 identity on every request", async (t) => {
+test("the fixture server sees the fixed identity on every request", async (t) => {
   const fixture = await startFixtureServer(t);
   const run = await spawnFixtureHost([fixture.url]);
   assert.equal(run.timedOut, false, `fixture host timed out: ${run.stderr}`);

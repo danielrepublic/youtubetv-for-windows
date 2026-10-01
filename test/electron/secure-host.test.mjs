@@ -32,7 +32,7 @@ const {
 } = await import("../../src/main/profile-path.ts");
 
 const EXPECTED_USER_AGENT =
-  "Mozilla/5.0 (PS4; Leanback Shell) Gecko/20100101 Firefox/65.0 LeanbackShell/01.00.01.75 Sony PS4/ (PS4, , no, CH)";
+  "Mozilla/5.0 (PS4; Leanback Shell) Cobalt/26.android.1.1036236-gold (unlike Gecko) v8/11.4.183.40-jit gles Starboard/17";
 
 function listSourceFiles() {
   const files = [];
@@ -50,7 +50,7 @@ function listSourceFiles() {
   return files.sort();
 }
 
-test("the fixed user agent is the exact verified PS4 string", () => {
+test("the fixed user agent is the exact owner-supplied PS4 Leanback Shell string with the Cobalt engine", () => {
   assert.equal(FIXED_USER_AGENT, EXPECTED_USER_AGENT);
 });
 

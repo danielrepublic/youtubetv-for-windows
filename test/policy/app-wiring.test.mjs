@@ -7,6 +7,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 const { startHost } = await import("../../src/main/app.ts");
+const { FIXED_USER_AGENT } = await import("../../src/main/user-agent.ts");
 
 function fakeSession() {
   return {
@@ -86,7 +87,7 @@ test("startHost installs both policies and loads the target once", async () => {
     },
     authOrigins: ["https://accounts.google.com"],
   });
-  assert.equal(host.userAgent.includes("Leanback"), true);
+  assert.equal(host.userAgent, FIXED_USER_AGENT);
   assert.equal(host.headerInterceptionActive, true);
   // Navigation policy: will-navigate + will-redirect + load-event handlers.
   assert.ok(captures.listeners["will-navigate"]?.length === 1);
