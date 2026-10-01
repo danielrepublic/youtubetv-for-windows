@@ -123,7 +123,10 @@ test("per-machine and shortcut options cannot be weakened", () => {
     ["packElevateHelper", false],
     ["deleteAppDataOnUninstall", true],
     ["createStartMenuShortcut", false],
-    ["createDesktopShortcut", false],
+    // The desktop shortcut is the one flag that is legitimately false: the
+    // installer asks the user for it, so flipping it back to true (making the
+    // template create one unasked) is the regression to reject here.
+    ["createDesktopShortcut", true],
     ["runAfterFinish", false],
     ["warningsAsErrors", false],
   ]) {

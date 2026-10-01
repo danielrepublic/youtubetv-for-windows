@@ -215,7 +215,11 @@ function checkManifestContract(manifest) {
       ["perMachine", true],
       ["allowElevation", true],
       ["packElevateHelper", true],
-      ["createDesktopShortcut", true],
+      // false is the deliberate value here, not a regression: the installer
+      // asks the user whether to create a desktop shortcut (see
+      // build/nsis.include), so the template must not create one on its own.
+      // The Start-menu shortcut below stays unconditional.
+      ["createDesktopShortcut", false],
       ["createStartMenuShortcut", true],
       ["deleteAppDataOnUninstall", false],
       ["warningsAsErrors", true],
