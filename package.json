@@ -1,6 +1,6 @@
 {
   "name": "youtubetv-for-windows",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "private": true,
   "description": "Unofficial, x64-only Windows host for the YouTube TV web interface (Electron + TypeScript).",
   "license": "UNLICENSED",
@@ -80,7 +80,7 @@
       "allowElevation": true,
       "packElevateHelper": true,
       "artifactName": "${productName}-${version}-x64.${ext}",
-      "createDesktopShortcut": true,
+      "createDesktopShortcut": false,
       "createStartMenuShortcut": true,
       "deleteAppDataOnUninstall": false,
       "runAfterFinish": true,

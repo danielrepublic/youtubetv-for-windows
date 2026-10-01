@@ -19,7 +19,7 @@ Watch YouTube TV (`https://www.youtube.com/tv`) in a fullscreen Windows app.
 
 - 這個程式不是官方產品。它和 YouTube 或 Google 沒有任何關係，也沒有得到它們的認可或支援。
 - 這個程式沒有服務保證（no SLA）。YouTube 隨時可能改變或封鎖這類存取，到時程式可能部分或完全不能用。
-- 這個程式用一組固定的電視裝置識別（PS4 Leanback 使用者代理字串）來請求電視版頁面。這是一種裝置偽裝（device spoofing），存在風險：YouTube 可能隨時不再接受它。這裡是把它當成風險告訴你，而不是功能保證。
+- 這個程式用一組固定的電視裝置識別（PS4 Leanback with Cobalt 使用者代理字串）來請求電視版頁面。這是一種裝置偽裝（device spoofing），存在風險：YouTube 可能隨時不再接受它。這裡是把它當成風險告訴你，而不是功能保證。
 - 說白了：This app is not official. There is no guarantee that sign-in, phone pairing, or 4K will keep working. 資料一旦刪掉就回不來（There is no rollback for your data），重新安裝也不會找回來。
 
 ### 系統需求
@@ -43,7 +43,7 @@ https://github.com/danielrepublic/youtubetv-for-windows/releases/latest
 youtubetv-for-windows-<版本>-x64.exe
 ```
 
-例如 `youtubetv-for-windows-0.1.1-x64.exe`。這是唯一要執行的檔案，其他東西都不用理會。不要從其他網站、網盤或別人傳給你的檔案安裝。
+例如 `youtubetv-for-windows-0.2.0-x64.exe`。這是唯一要執行的檔案，其他東西都不用理會。不要從其他網站、網盤或別人傳給你的檔案安裝。
 
 ### 安裝
 
@@ -51,7 +51,7 @@ youtubetv-for-windows-<版本>-x64.exe
 2. 雙擊執行。此時可能先跳出 SmartScreen 警告，處理方式見「SmartScreen 警告」。
 3. UAC 提示按「是」。這個提示不能略過：安裝程式要寫入 `C:\Program Files\youtubetv-for-windows` 與 `C:\ProgramData\youtubetv-for-windows`，兩者都是整台電腦共用的系統位置，只有系統管理員寫得進去。
 4. 依照安裝精靈完成安裝。程式會裝到 `C:\Program Files\youtubetv-for-windows`，這台電腦上的每個 Windows 使用者都裝同一份。
-5. 完成後從開始功能表的 `youtubetv-for-windows` 捷徑啟動（安裝程式也可能提供桌面捷徑與完成後直接啟動的選項）。
+5. 完成後從開始功能表的 `youtubetv-for-windows` 捷徑啟動（安裝程式會問你要不要在桌面也建立捷徑，並提供完成後直接啟動的選項）。
 
 這台電腦已經裝過這個程式的話，安裝程式會先問你要怎麼辦，見「已經安裝過：重新安裝、解除安裝或取消」。
 
@@ -185,7 +185,7 @@ Please read the disclosure below before you install.
 
 - This app is not official. It is not affiliated with, endorsed by, or supported by YouTube or Google.
 - There is no SLA. YouTube can change or block this kind of access at any time, and the app may then partly or fully stop working.
-- The app requests the TV page with a fixed TV device identity (a PS4 Leanback user-agent string). That's device spoofing, and it's a risk, not a feature: YouTube may stop accepting it whenever it wants.
+- The app requests the TV page with a fixed TV device identity (a PS4 Leanback with Cobalt user-agent string). That's device spoofing, and it's a risk, not a feature: YouTube may stop accepting it whenever it wants.
 - In plain words: This app is not official. There is no guarantee that sign-in, phone pairing, or 4K will keep working. There is also no rollback for your data: once it is deleted, reinstalling does not bring it back.
 
 ### Requirements
@@ -209,7 +209,7 @@ On that page, only trust the asset named like this:
 youtubetv-for-windows-<version>-x64.exe
 ```
 
-For example `youtubetv-for-windows-0.1.1-x64.exe`. That is the only file to run; nothing else there needs your attention. Don't install files from other sites, drives, or copies someone sent you.
+For example `youtubetv-for-windows-0.2.0-x64.exe`. That is the only file to run; nothing else there needs your attention. Don't install files from other sites, drives, or copies someone sent you.
 
 ### Install
 
@@ -217,7 +217,7 @@ For example `youtubetv-for-windows-0.1.1-x64.exe`. That is the only file to run;
 2. Double-click it. SmartScreen will likely warn you first; the next section covers that.
 3. Answer yes at the UAC prompt. It can't be skipped: the installer writes to `C:\Program Files\youtubetv-for-windows` and `C:\ProgramData\youtubetv-for-windows`, two machine-wide system locations that a standard account cannot write to.
 4. Follow the installer. It installs to `C:\Program Files\youtubetv-for-windows`, one copy for every Windows user on this PC.
-5. Launch it from the `youtubetv-for-windows` Start-menu shortcut (the installer may also offer a desktop shortcut and a launch-after-finish option).
+5. Launch it from the `youtubetv-for-windows` Start-menu shortcut (the installer asks whether to also create a desktop shortcut, and offers a launch-after-finish option).
 
 If the app is already on this PC, the installer asks what to do first; see "Already installed: reinstall, uninstall, or cancel".
 
