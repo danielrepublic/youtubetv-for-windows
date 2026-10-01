@@ -424,17 +424,15 @@ function readMarker(directory, name) {
 
 // NSIS finishes a directory removal just after the launched process can
 // return, so every absence assertion polls for a bounded window instead of
-// sampling once. Returns the first observed listing, or null once gone.
+// sampling once. Returns null once gone, or the residue only after timeout.
 async function waitUntilGone(target, timeoutMs = 20000) {
   const deadline = Date.now() + timeoutMs;
-  let listing = null;
   for (;;) {
     if (!fs.existsSync(target)) {
-      return listing;
+      return null;
     }
-    listing = fs.readdirSync(target);
     if (Date.now() >= deadline) {
-      return listing;
+      return fs.readdirSync(target);
     }
     await new Promise((resolve) => setTimeout(resolve, 250));
   }
