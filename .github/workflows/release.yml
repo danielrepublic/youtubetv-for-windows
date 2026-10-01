@@ -49,12 +49,19 @@ jobs:
         shell: pwsh
         run: |
           npm ci
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           npm run typecheck
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           npm run test:unit
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           npm run lint
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           npm run format:check
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           npm run package
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           npm run verify:artifacts
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Refuse to overwrite an existing release version
         shell: pwsh
@@ -65,6 +72,7 @@ jobs:
           if ($LASTEXITCODE -eq 0) {
             throw "Refusing to overwrite existing release $env:GITHUB_REF_NAME"
           }
+          exit 0
 
       - name: Write bilingual release notes
         shell: pwsh
