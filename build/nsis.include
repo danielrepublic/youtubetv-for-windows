@@ -237,6 +237,38 @@
 !define YTVW_ACL_FAILURE_MESSAGE "無法建立或設定應用程式資料目錄的權限，安裝已中止。$\r$\nThe application data directory could not be created or its permissions granted; the installation was aborted.$\r$\n($1)$\r$\n(icacls exit $2)"
 
 ; ---------------------------------------------------------------------------
+; DESKTOP SHORTCUT CHOICE
+;
+; `build.nsis.createDesktopShortcut` is false, so electron-builder's template
+; no longer calls `addDesktopLink` and creates nothing on the desktop on its
+; own. That same setting also makes the template define
+; DO_NOT_CREATE_DESKTOP_SHORTCUT, which switches off the desktop-link removal
+; in its own uninstaller (uninstaller.nsh:193), so customUnInstall takes that
+; back over. Both directions live here.
+;
+; The question is asked and answered inside customInstall, and the answer
+; travels on the NSIS stack rather than in a Var. customInit runs before any
+; page, so it could ask, but carrying the answer from there to the install
+; section needs a Var declared in one hook and read in the other, and the
+; packaging tests compile this include with only one hook inserted at a time.
+; Under warningsAsErrors an unused Var (NSIS 6001) or a Var read where it was
+; never declared (NSIS 6000) is a hard build failure, so a cross-hook Var
+; cannot be made to satisfy both the real build and those harnesses. The stack
+; works in a section, where a Var cannot even be declared.
+;
+; The link path is rebuilt from `$DESKTOP` and `SHORTCUT_NAME` instead of reused
+; from the template's `$newDesktopLink`, and `WinShell::SetLnkAUMI` applies the
+; same Application User Model ID the template applies, so a chosen shortcut is
+; identical to the one the unconditional path produced, taskbar grouping
+; included. The rebuild is not a downgrade in fidelity: SHORTCUT_NAME is the
+; value common.nsh uses to compute $newDesktopLink in the first place.
+;
+; A silent run cannot answer a question, so it takes the default, which
+; preserves the previous always-create behaviour.
+; ---------------------------------------------------------------------------
+!define YTVW_DESKTOP_SHORTCUT_QUESTION "要在桌面建立 youtubetv-for-windows 的捷徑嗎？$\r$\nCreate a youtubetv-for-windows shortcut on the desktop?"
+
+; ---------------------------------------------------------------------------
 ; electron-builder hook: runs inside .onInit, after initMultiUser and before
 ; CHECK_APP_RUNNING / uninstallOldVersion / installApplicationFiles.
 ; ---------------------------------------------------------------------------
@@ -311,6 +343,56 @@
     MessageBox MB_OK|MB_ICONSTOP "${YTVW_ACL_FAILURE_MESSAGE}" /SD IDOK
     Abort
   ${EndIf}
+  ; Desktop shortcut, created only when the user says yes. The question and the
+  ; creation that honours it live in this one hook, and the answer travels on
+  ; the NSIS stack rather than in a Var, because a Var cannot be declared
+  ; inside a section and this hook is inserted into the install section. Using
+  ; the stack also keeps the include clean for the packaging tests, which
+  ; compile this file while inserting only one hook at a time: the build runs
+  ; with warningsAsErrors, so a Var that some of those harnesses never
+  ; reference would be a hard error (NSIS 6001) and one declared in a
+  ; different hook would be an unknown variable (NSIS 6000). $8 is free here;
+  ; the ACL block above uses $0 to $4 and is finished with them.
+  ;
+  ; The question appears once the file copy is done, just before the finish
+  ; page, which is the last point at which the user can still decline. A
+  ; silent run cannot answer, so it takes the default and keeps the
+  ; always-create behaviour of earlier versions.
+  Push "1"
+  ${IfNot} ${Silent}
+    MessageBox MB_YESNO|MB_ICONQUESTION "${YTVW_DESKTOP_SHORTCUT_QUESTION}" /SD IDYES IDYES ytvwShortcutYes IDNO ytvwShortcutNo
+    ytvwShortcutYes:
+      Pop $8
+      Push "1"
+      Goto ytvwShortcutAnswered
+    ytvwShortcutNo:
+      Pop $8
+      Push "0"
+    ytvwShortcutAnswered:
+  ${EndIf}
+  Pop $8
+  ; The desktop link path is rebuilt from $DESKTOP and SHORTCUT_NAME rather than
+  ; reused from the template's $newDesktopLink, because that Var only exists in
+  ; a real electron-builder build and the packaging tests compile this file
+  ; against a minimal harness where it would be an unknown variable (NSIS 6000)
+  ; under warningsAsErrors. SHORTCUT_NAME is the same value the template's
+  ; common.nsh uses for $newDesktopLink, so the path is identical in a real
+  ; build. SetLnkAUMI applies the Application User Model ID the template
+  ; applies, keeping taskbar grouping identical to the old unconditional
+  ; shortcut. A failure here is not fatal: the Start-menu shortcut already
+  ; exists and this was a nicety. Running after the ACL grant above means an
+  ; aborted install leaves nothing behind.
+  !ifdef SHORTCUT_NAME
+    ${If} $8 == "1"
+      ClearErrors
+      CreateShortCut "$DESKTOP\${SHORTCUT_NAME}.lnk" "$INSTDIR\${APP_EXECUTABLE_FILENAME}" "" "$INSTDIR\${APP_EXECUTABLE_FILENAME}" 0 "" "" "${APP_DESCRIPTION}"
+      ${IfNot} ${Errors}
+        !ifdef APP_ID
+          WinShell::SetLnkAUMI "$DESKTOP\${SHORTCUT_NAME}.lnk" "${APP_ID}"
+        !endif
+      ${EndIf}
+    ${EndIf}
+  !endif
 !macroend
 
 ; ---------------------------------------------------------------------------
@@ -721,6 +803,20 @@ Var ytvwUnRoot
 ; template's app-running check and before file/registry/shortcut removal.
 ; ---------------------------------------------------------------------------
 !macro customUnInstall
+  ; The desktop shortcut is created only when the user asks for it, but
+  ; `createDesktopShortcut: false` also makes electron-builder define
+  ; DO_NOT_CREATE_DESKTOP_SHORTCUT, and its own uninstaller block at
+  ; uninstaller.nsh:193 is guarded by `!ifndef` on that define. Left alone, the
+  ; link this installer may have created (or one an older build created
+  ; unconditionally) would survive uninstall. The path is rebuilt the same way
+  ; customInstall builds it, and for the same reason: $oldDesktopLink only
+  ; exists in a real electron-builder build, so using it would be an unknown
+  ; variable (NSIS 6000) in the packaging tests that compile this include.
+  ; Delete is a no-op when the link is absent.
+  !ifdef SHORTCUT_NAME
+    WinShell::UninstShortcut "$DESKTOP\${SHORTCUT_NAME}.lnk"
+    Delete "$DESKTOP\${SHORTCUT_NAME}.lnk"
+  !endif
   !insertmacro YTVW_REMOVE_DATA_DIRECTORY
 !macroend
 
