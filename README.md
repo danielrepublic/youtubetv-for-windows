@@ -43,7 +43,7 @@ https://github.com/danielrepublic/youtubetv-for-windows/releases/latest
 youtubetv-for-windows-<版本>-x64.exe
 ```
 
-例如 `youtubetv-for-windows-0.1.0-x64.exe`。這是唯一要執行的檔案，其他東西都不用理會。不要從其他網站、網盤或別人傳給你的檔案安裝。
+例如 `youtubetv-for-windows-0.1.1-x64.exe`。這是唯一要執行的檔案，其他東西都不用理會。不要從其他網站、網盤或別人傳給你的檔案安裝。
 
 ### 安裝
 
@@ -209,7 +209,7 @@ On that page, only trust the asset named like this:
 youtubetv-for-windows-<version>-x64.exe
 ```
 
-For example `youtubetv-for-windows-0.1.0-x64.exe`. That is the only file to run; nothing else there needs your attention. Don't install files from other sites, drives, or copies someone sent you.
+For example `youtubetv-for-windows-0.1.1-x64.exe`. That is the only file to run; nothing else there needs your attention. Don't install files from other sites, drives, or copies someone sent you.
 
 ### Install
 
