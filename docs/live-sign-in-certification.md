@@ -1,10 +1,10 @@
 Status: passed
 
-Scope: pre-upgrade user attestation, recorded with v0.1.0 installed. Sign-in
-on v0.1.1 has not been re-verified. The per-user identity/layout change in
-issue #1 (SID-keyed `users\by-sid\<SID>`) postdates this attestation: live
-sign-in on the SID layout has NOT been re-verified, and this record certifies
-no build after the change.
+Scope: the leading `passed` status covers the SID-keyed layout
+(`users\by-sid\<SID>`, issue #1), attested 2026-10-17 on an installed v0.2.0
+build (see the status history below). The earlier 2026-10-01 attestation,
+recorded with v0.1.0 installed before the layout change, is retained in the
+history and is superseded for the current layout by the 2026-10-17 entry.
 
 # Live sign-in certification (release gate)
 
@@ -253,6 +253,16 @@ Google account (2FA phone available), and a build of this repository.
   the profile path, so the earlier `passed` attestation no longer covers the
   current build; live sign-in on the SID layout is NOT re-verified here. Re-run
   the procedure above on the new layout before claiming `passed` for it.
+- 2026-10-17 — `passed` on the SID layout. The v0.2.0 build produced from the
+  issue #1/#2/#3 branch was installed and launched unelevated; the maintainer
+  signed in through the app-owned child flow on the `users\by-sid\<SID>` layout,
+  and attests that sign-in succeeded and the session survived a full relaunch in
+  the same per-Windows-user profile. The sign-in state is observed on disk under
+  `%PROGRAMDATA%\youtubetv-for-windows\users\by-sid\<SID>\profile`
+  (`Partitions\youtubetv\Network\Cookies`). This supersedes the 2026-10-16 note:
+  the SID layout is now re-verified. No logs or screenshots were provided;
+  visual attestation is accepted as before. Phone pairing remains a separate,
+  uncertified gate.
 
 ## Phone pairing follow-up (separate release gate)
 
