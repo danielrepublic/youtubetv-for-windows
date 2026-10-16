@@ -26,8 +26,11 @@
 //     warningsAsErrors), including the path with no `YTVW_*` override at all;
 //   - the hook creates the root and leaves the local Users group a
 //     non-inherited `(OI)(CI)` grant on it whose DECODED access mask is
-//     exactly the Modify set plus FILE_DELETE_CHILD, and carries neither
+//     exactly the Modify set WITHOUT FILE_DELETE_CHILD, and carries neither
 //     WRITE_DAC nor WRITE_OWNER nor GENERIC_ALL;
+//   - the grant is root-only (no /T): a pre-existing PROTECTED child
+//     directory keeps its byte-identical SDDL across the install, so a
+//     reinstall never re-opens a runtime-hardened per-SID subtree;
 //   - a non-directory root, a failing grant, and a missing ProgramData each
 //     abort the install (a silent install exits nonzero) instead of
 //     continuing with an unusable or drive-relative path.
@@ -68,8 +71,11 @@
 // authorises what a token created itself.
 //
 // Consequently this suite asserts the MASK and never a behavioural necessity for
-// any individual right. The exact-mask assertion below subsumes the separate
-// delete-child bit check, so removing that check does not weaken the suite.
+// any individual right. The exact-mask assertion below subsumes the
+// delete-child absence check, so asserting that bit separately as well only
+// states the same property twice - and it is stated twice anyway, because the
+// absence of FILE_DELETE_CHILD is the property this suite exists to pin after
+// issue #2 narrowed the grant.
 
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
@@ -310,15 +316,16 @@ function machineRootOf(base) {
 // icacls prints one ACE per line, prefixed by the file name on the FIRST line
 // only, so that prefix has to come off before the entries can be compared. A
 // granted (not inherited) Users entry then looks like:
-//   BUILTIN\Users:(OI)(CI)(M,DC)
+//   BUILTIN\Users:(OI)(CI)(M)
 // The leading (I) on an inherited entry is what tells the two apart, so the
-// pattern is anchored on the whole entry rather than a substring search.
+// pattern is anchored on the whole entry rather than a substring search. The
+// anchor also rejects `(M,DC)`: the old mask must fail here, not pass.
 //
 // The printed form is kept as a SECONDARY check only. The authoritative
 // assertion is the decoded numeric mask below, because `(M)` and `(M,DC)` look
 // almost the same and only the decode settles whether delete-child is there.
 const usersGrantPattern = new RegExp(
-  "^(?:BUILTIN\\\\Users|\\*S-1-5-32-545):\\(OI\\)\\(CI\\)\\(M,DC\\)$",
+  "^(?:BUILTIN\\\\Users|\\*S-1-5-32-545):\\(OI\\)\\(CI\\)\\(M\\)$",
 );
 
 function readAclEntries(target) {
@@ -367,17 +374,17 @@ function readSddl(target) {
       "-NoProfile",
       "-NonInteractive",
       "-Command",
-      `(Get-Acl -LiteralPath '${target.replace(/'/g, "''")}').Sddl`,
+      `(New-Object System.IO.DirectoryInfo -ArgumentList '${target.replace(/'/g, "''")}').GetAccessControl().Sddl`,
     ],
     { windowsHide: true, encoding: "utf8" },
   );
   assert.equal(
     result.status,
     0,
-    `Get-Acl failed on ${target}: ${result.stderr}`,
+    `reading the SDDL failed on ${target}: ${result.stderr}`,
   );
   const sddl = result.stdout.trim();
-  assert.notEqual(sddl, "", `Get-Acl returned an empty SDDL for ${target}`);
+  assert.notEqual(sddl, "", `the SDDL for ${target} must not be empty`);
   return sddl;
 }
 
@@ -452,7 +459,7 @@ function hex(mask) {
   return `0x${mask.toString(16).toUpperCase()}`;
 }
 
-function assertUsersDeleteChildGrant(target) {
+function assertUsersModifyGrant(target) {
   const ace = readGrantedUsersAce(target);
   assert.notEqual(
     ace.mask,
@@ -462,14 +469,13 @@ function assertUsersDeleteChildGrant(target) {
   );
   assert.ok(
     ace.flags.includes("OI") && ace.flags.includes("CI"),
-    `the Users grant must inherit to objects and containers so the whole tree ` +
-      `is writable; flags "${ace.flags}" on ${target}`,
+    `the Users grant must inherit to objects and containers so newly created ` +
+      `children are writable; flags "${ace.flags}" on ${target}`,
   );
 
-  // The pre-change grant was 0x1301BF, which is exactly Modify minus
+  // The grant IS the Modify set 0x1301BF: exactly Modify minus
   // FILE_DELETE_CHILD. Asserting the superset relationship keeps every right
-  // the Modify grant gave (create, write, read, delete, attributes) while
-  // requiring delete-child on top.
+  // the Modify grant gives (create, write, read, delete, attributes).
   const missing = MODIFY_MASK & ~ace.mask;
   assert.equal(
     missing,
@@ -479,21 +485,20 @@ function assertUsersDeleteChildGrant(target) {
     )}; granted ${hex(ace.mask)} is missing ${hex(missing)} on ${target}`,
   );
 
-  // There is deliberately NO separate "FILE_DELETE_CHILD must be granted or a
-  // standard user cannot X" assertion. That claim was measured and refuted: with
-  // no Users grant at all, a Medium-integrity token still completes 11 of the
-  // same 12 operations, because every object the app creates is owned by the app
-  // itself through the inherited CREATOR OWNER ACE, and the twelfth (single-call
-  // removal of a NON-EMPTY directory) fails with ENOTEMPTY under the grant too.
-  // Asserting the bit with a behavioural reason would enshrine a claim that
-  // measurement contradicts, and a test that asserts something untrue is worse
-  // than no test.
-  //
-  // The bit is still pinned, and this suite is NOT weakened by its absence: the
-  // exact-mask assertion a few lines below requires
-  // `ace.mask === MODIFY_MASK | FILE_DELETE_CHILD`, which STRICTLY IMPLIES
-  // `ace.mask & FILE_DELETE_CHILD !== 0`. The mask assertion is the stronger
-  // claim, and it is correct.
+  // FILE_DELETE_CHILD must be ABSENT, pinned twice on purpose: once here as
+  // the named bit (the property issue #2 narrowed the grant for), and once
+  // below as part of the exact mask. The absence carries no behavioural
+  // claim: measured, a Medium-integrity token completes 11 of the same 12
+  // operations with no Users grant at all, because every object the app
+  // creates is owned by the app itself through the inherited CREATOR OWNER
+  // ACE, and the twelfth (single-call removal of a NON-EMPTY directory) fails
+  // with ENOTEMPTY under a grant WITH delete-child too.
+  assert.equal(
+    (ace.mask & FILE_DELETE_CHILD) === 0,
+    true,
+    `the Users grant must NOT include FILE_DELETE_CHILD (${hex(FILE_DELETE_CHILD)}); ` +
+      `granted mask ${hex(ace.mask)} on ${target} from ACE (${ace.ace})`,
+  );
 
   for (const [bit, name] of [
     [WRITE_DAC, "WRITE_DAC"],
@@ -510,12 +515,13 @@ function assertUsersDeleteChildGrant(target) {
   }
 
   // The exact mask is pinned so a later widening (the simple right `F` decodes
-  // to 0x1F01FF) fails here rather than passing the subset checks above.
+  // to 0x1F01FF, the old set with delete-child decodes to 0x1301FF) fails here
+  // rather than passing the subset checks above.
   assert.equal(
     ace.mask,
-    MODIFY_MASK | FILE_DELETE_CHILD,
-    `the Users grant must be exactly Modify plus delete-child ` +
-      `(${hex(MODIFY_MASK | FILE_DELETE_CHILD)}); granted ${hex(ace.mask)} on ` +
+    MODIFY_MASK,
+    `the Users grant must be exactly Modify without delete-child ` +
+      `(${hex(MODIFY_MASK)}); granted ${hex(ace.mask)} on ` +
       `${target} from ACE (${ace.ace})`,
   );
 
@@ -525,7 +531,7 @@ function assertUsersDeleteChildGrant(target) {
   const entries = readAclEntries(target);
   assert.ok(
     entries.some((line) => usersGrantPattern.test(line)),
-    `icacls must re-render the Users grant as "(OI)(CI)(M,DC)"; got:\n${entries.join("\n")}`,
+    `icacls must re-render the Users grant as "(OI)(CI)(M)"; got:\n${entries.join("\n")}`,
   );
   return ace;
 }
@@ -554,7 +560,7 @@ test(
 );
 
 test(
-  "the install hook creates the machine root and grants the Users group modify plus delete-child",
+  "the install hook creates the machine root and grants the Users group modify without delete-child",
   { skip: skipReason },
   async (t) => {
     const directory = createCase(t, "grant");
@@ -592,11 +598,84 @@ test(
       fs.statSync(machineRoot).isDirectory(),
       `the machine root must exist: ${machineRoot}`,
     );
-    const ace = assertUsersDeleteChildGrant(machineRoot);
+    const ace = assertUsersModifyGrant(machineRoot);
     t.diagnostic(
       `Users grant on the machine root: ACE (${ace.ace}) decoded ${hex(ace.mask)} ` +
-        `= ${hex(MODIFY_MASK)} (Modify) | 0x${FILE_DELETE_CHILD.toString(16)} (FILE_DELETE_CHILD); ` +
+        `= ${hex(MODIFY_MASK)} (Modify without FILE_DELETE_CHILD); ` +
         `WRITE_DAC clear, WRITE_OWNER clear, GENERIC_ALL clear`,
+    );
+  },
+);
+
+test(
+  "a pre-existing protected child directory is left byte-identical by the installer grant",
+  { skip: skipReason },
+  async (t) => {
+    // Issue #2: the app hardens each per-SID subtree at runtime with a
+    // protected DACL. The installer grant is root-only (no /T), so a
+    // reinstall must never re-add a Users ACE inside such a subtree. A /T
+    // grant would walk the child and change its SDDL; asserting byte-identity
+    // across the install proves the walk is gone.
+    const directory = createCase(t, "protected-child");
+    const installDirectory = path.join(directory, "install");
+    fs.mkdirSync(installDirectory);
+    const machineRootBase = path.join(directory, "machine-root-base");
+    const machineRoot = machineRootOf(machineRootBase);
+    const child = path.join(
+      machineRoot,
+      "users",
+      "by-sid",
+      "S-1-5-21-1000-2000-3000-1001",
+    );
+    fs.mkdirSync(child, { recursive: true });
+    const powershell = path.join(
+      process.env.SystemRoot ?? "C:\\Windows",
+      "System32",
+      "WindowsPowerShell",
+      "v1.0",
+      "powershell.exe",
+    );
+    const protect = spawnSync(
+      powershell,
+      [
+        "-NoProfile",
+        "-NonInteractive",
+        "-Command",
+        `$di=New-Object System.IO.DirectoryInfo -ArgumentList '${child}';` +
+          `$sec=$di.GetAccessControl();` +
+          `$sec.SetSecurityDescriptorSddlForm('D:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)');` +
+          `$di.SetAccessControl($sec)`,
+      ],
+      { windowsHide: true, encoding: "utf8" },
+    );
+    assert.equal(
+      protect.status,
+      0,
+      `protecting the child must succeed: ${protect.stderr}`,
+    );
+    const before = readSddl(child);
+    assert.doesNotMatch(
+      before,
+      /S-1-5-32-545/,
+      "the protected child must carry no Users ACE before the install",
+    );
+    fs.writeFileSync(
+      path.join(directory, "protected.nsi"),
+      harnessSource(installDirectory, [
+        `!define YTVW_MACHINE_ROOT "${machineRootBase}"`,
+      ]),
+      "utf8",
+    );
+    const compiled = compile(directory, "protected.nsi");
+    assert.equal(compiled.status, 0, compiled.output.slice(-800));
+
+    assert.equal(await runSilent(directory), 0);
+    const after = readSddl(child);
+    assert.equal(
+      after,
+      before,
+      "the installer grant must leave a protected child byte-identical " +
+        "(a /T grant would add a Users ACE to it)",
     );
   },
 );
