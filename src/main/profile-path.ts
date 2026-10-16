@@ -3,18 +3,32 @@
 //
 // MACHINE PATH CONVENTION (fixed; the NSIS installer creates and ACLs the
 // machine root, and the uninstaller removes it):
-//   %PROGRAMDATA%\youtubetv-for-windows\users\<key>\profile   (sessionData)
-//   %PROGRAMDATA%\youtubetv-for-windows\users\<key>\userdata  (userData)
+//   %PROGRAMDATA%\youtubetv-for-windows\users\by-sid\<SID>\profile
+//   %PROGRAMDATA%\youtubetv-for-windows\users\by-sid\<SID>\userdata
 //
-// <key> is a per-Windows-user segment derived in userKey() below. The machine
-// root under %PROGRAMDATA% is machine-wide (the installer grants the local
-// Users group modify, because an elevated installer otherwise creates a folder
-// a standard user can only read); the per-user <key> segment is what keeps two
-// concurrent Windows users from sharing one Chromium user-data directory.
-// Chromium's Windows single-instance protection is a `lockfile` inside the
-// user-data directory plus a message-only window, and Electron only takes it
-// when app.requestSingleInstanceLock() is called, so a shared directory lets a
-// second signed-in user corrupt the first user's profile.
+// <SID> is the stable security identifier of the Windows account the process
+// runs as, read once in windows-user-identity.ts. The machine root under
+// %PROGRAMDATA% is machine-wide (the installer grants the local Users group
+// modify, because an elevated installer otherwise creates a folder a standard
+// user can only read); the per-account SID segment is what keeps two concurrent
+// Windows users from sharing one Chromium user-data directory. An account name
+// cannot do that job: any two names that sanitize to the same characters --
+// equal-length non-ASCII names, "user name" and "user_name", one profile name
+// under two different roots -- produced ONE shared directory. Chromium's
+// Windows single-instance protection is a `lockfile` inside the user-data
+// directory plus a message-only window, and Electron only takes it when
+// app.requestSingleInstanceLock() is called, so a shared directory lets a
+// second signed-in user corrupt the first user's profile. The by-sid level is
+// structural, so a legacy account literally NAMED "by-sid" cannot alias a SID
+// directory either.
+//
+// LEGACY DATA: earlier releases keyed the tree by account name under
+// users\<name>\. Those directories are never read, copied, adopted, merged, or
+// deleted. Detection only informs the user that legacy sign-in state is not
+// transferred to the SID directory. An
+// identity that cannot be obtained never falls back to a name-derived
+// persistent key: it uses the temp fallback, so identity failure can never make
+// two users share one profile.
 //
 // There is deliberately NO version segment in the path: the persisted browser
 // profile must survive application replacement, because the installer replaces
@@ -39,23 +53,44 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-
-export const PROFILE_DIRECTORY_NAME = "youtubetv-for-windows";
-export const USERS_DIRECTORY_NAME = "users";
-export const PROFILE_SUBDIRECTORY_NAME = "profile";
-export const USER_DATA_SUBDIRECTORY_NAME = "userdata";
-export const SESSION_DATA_PATH_NAME = "sessionData";
-export const USER_DATA_PATH_NAME = "userData";
+import type { SidResult } from "./windows-user-identity.ts";
+import { resolveCurrentUserSidSync } from "./windows-user-identity.ts";
+import type {
+  LegacyProfileInputs,
+  ProfileLayoutInputs,
+} from "./profile-layout.ts";
+import {
+  PROFILE_DIRECTORY_NAME,
+  PROFILE_SUBDIRECTORY_NAME,
+  USER_DATA_SUBDIRECTORY_NAME,
+  SESSION_DATA_PATH_NAME,
+  USER_DATA_PATH_NAME,
+  legacyProfileLeavesExist,
+  legacyUserDirectory,
+  resolveProfileLayout,
+} from "./profile-layout.ts";
+export * from "./profile-layout.ts";
 
 export interface BilingualGuidance {
   zhTW: string;
   en: string;
 }
 
+export interface ProfileMigrationNotice {
+  // The untouched pre-SID directory, named so the user can find it, and the
+  // fresh SID directory that starts empty and needs a re-login.
+  legacyDirectory: string;
+  freshDirectory: string;
+}
+
 export interface ProfileActivation {
   directory: string;
   usedFallback: boolean;
   guidance: BilingualGuidance | null;
+  // Non-null exactly when a SID directory was activated AND legacy
+  // name-keyed data still exists. Null on the temp fallback, which persists
+  // nothing and therefore promises no re-login.
+  migration: ProfileMigrationNotice | null;
 }
 
 // Minimal filesystem surface, injectable so tests can simulate an
@@ -73,78 +108,6 @@ const nodeFileSystem: ProfileFileSystem = {
   statSync: (candidate) => fs.statSync(candidate),
   mkdtempSync: (prefix) => fs.mkdtempSync(prefix),
 };
-
-export interface ProfileLayoutInputs {
-  // %PROGRAMDATA% in production; blank/missing falls through to
-  // machineRootFallback so it can never produce a relative path.
-  programDataDir: string | undefined | null;
-  // The per-Windows-user key sources, in priority order (see userKey()).
-  userProfile: string | undefined | null;
-  homeDir: string;
-  userName: string;
-  // Absolute directory used only when programDataDir is blank/missing
-  // (production passes app.getPath("appData")).
-  machineRootFallback: string;
-}
-
-export interface ProfileLayout {
-  machineRoot: string;
-  userDirectory: string;
-  profileDirectory: string;
-  userDataDirectory: string;
-}
-
-function firstNonBlank(
-  ...values: (string | undefined | null)[]
-): string | undefined {
-  for (const value of values) {
-    if (typeof value === "string" && value.trim().length > 0) {
-      return value.trim();
-    }
-  }
-  return undefined;
-}
-
-// Sanitizes a Windows user key into a single path segment: every character
-// outside [A-Za-z0-9._-] (including path separators, colons and spaces)
-// becomes "_". The result is never empty and is never the "." or ".."
-// navigation segment, so the key always names exactly one ordinary directory
-// level and cannot be used to address a parent of the users\<key> room.
-export function sanitizeUserKey(raw: string): string {
-  const sanitized = raw.replace(/[^A-Za-z0-9._-]/g, "_");
-  if (sanitized.length === 0 || sanitized === "." || sanitized === "..") {
-    return "user";
-  }
-  return sanitized;
-}
-
-// Pure resolver: builds the machine root, the per-user directory, and the two
-// sibling data directories under it. programDataDir is process.env.PROGRAMDATA
-// in production; a blank/missing value falls through to the absolute
-// machineRootFallback. The per-user key comes from the basename of
-// userProfile, then the basename of homeDir, then userName, sanitized into a
-// single segment.
-export function resolveProfileLayout(
-  inputs: ProfileLayoutInputs,
-): ProfileLayout {
-  const rootBase =
-    firstNonBlank(inputs.programDataDir) ?? inputs.machineRootFallback;
-  const machineRoot = path.join(rootBase, PROFILE_DIRECTORY_NAME);
-  const pathSource = firstNonBlank(inputs.userProfile, inputs.homeDir);
-  const rawKey =
-    pathSource === undefined ? inputs.userName : path.basename(pathSource);
-  const userDirectory = path.join(
-    machineRoot,
-    USERS_DIRECTORY_NAME,
-    sanitizeUserKey(rawKey),
-  );
-  return {
-    machineRoot,
-    userDirectory,
-    profileDirectory: path.join(userDirectory, PROFILE_SUBDIRECTORY_NAME),
-    userDataDirectory: path.join(userDirectory, USER_DATA_SUBDIRECTORY_NAME),
-  };
-}
 
 // Ensures the directory exists and is a directory. Returns a reason string
 // instead of throwing so the caller can choose the documented fallback.
@@ -233,8 +196,12 @@ export function profileFallbackGuidance(
 
 export interface ProfileActivationDeps {
   layout: ProfileLayoutInputs;
+  legacy: LegacyProfileInputs;
   setSessionDataPath: (directory: string) => void;
   setUserDataPath: (directory: string) => void;
+  // The identity seam, injectable so tests can simulate an unavailable SID
+  // without touching the real one.
+  resolveSid?: () => SidResult;
   fileSystem?: ProfileFileSystem;
   ensureFallback?: (fileSystem: ProfileFileSystem) => FallbackResult;
 }
@@ -242,14 +209,14 @@ export interface ProfileActivationDeps {
 function activateFallback(
   deps: ProfileActivationDeps,
   fileSystem: ProfileFileSystem,
-  layout: ProfileLayout,
+  failedDirectory: string,
 ): ProfileActivation {
   const fallback = (deps.ensureFallback ?? ensureFallbackProfileDirectory)(
     fileSystem,
   );
   if (!fallback.ok) {
     throw new Error(
-      `profile activation failed for "${layout.profileDirectory}" and the fallback failed too: ${fallback.reason}`,
+      `profile activation failed for "${failedDirectory}" and the fallback failed too: ${fallback.reason}`,
     );
   }
   deps.setSessionDataPath(fallback.profileDirectory);
@@ -257,53 +224,76 @@ function activateFallback(
   return {
     directory: fallback.profileDirectory,
     usedFallback: true,
-    guidance: profileFallbackGuidance(layout.profileDirectory),
+    guidance: profileFallbackGuidance(failedDirectory),
+    migration: null,
   };
 }
 
-// Activates the persistent layout: resolves, ensures BOTH directories, then
-// points Electron at them via setSessionDataPath / setUserDataPath
-// (production: app.setPath("sessionData", …) and app.setPath("userData", …)).
-// On corruption/creation failure of either directory it uses the documented
-// temp fallback and reports usedFallback + bilingual guidance. Only throws when
-// even the fallback cannot be created (disk catastrophe); production still
-// prefers to attempt startup and lets the caller decide.
+// Activates the persistent layout: obtains the SID, resolves, ensures BOTH
+// directories, then points Electron at them via setSessionDataPath /
+// setUserDataPath (production: app.setPath("sessionData", …) and
+// app.setPath("userData", …)). An unavailable identity, or corruption/creation
+// failure of either directory, uses the documented temp fallback and reports
+// usedFallback + bilingual guidance. Only throws when even the fallback cannot
+// be created (disk catastrophe); production still prefers to attempt startup
+// and lets the caller decide.
 export function activateProfileDirectory(
   deps: ProfileActivationDeps,
 ): ProfileActivation {
   const fileSystem = deps.fileSystem ?? nodeFileSystem;
-  const layout = resolveProfileLayout(deps.layout);
+  const sid = (deps.resolveSid ?? resolveCurrentUserSidSync)();
+  if (!sid.ok) {
+    return activateFallback(
+      deps,
+      fileSystem,
+      `the per-account profile directory for this Windows identity (${sid.reason})`,
+    );
+  }
+  const layout = resolveProfileLayout(deps.layout, sid.sid);
   const profileEnsured = ensureProfileDirectory(
     layout.profileDirectory,
     fileSystem,
   );
   if (!profileEnsured.ok) {
-    return activateFallback(deps, fileSystem, layout);
+    return activateFallback(deps, fileSystem, layout.profileDirectory);
   }
   const userDataEnsured = ensureProfileDirectory(
     layout.userDataDirectory,
     fileSystem,
   );
   if (!userDataEnsured.ok) {
-    return activateFallback(deps, fileSystem, layout);
+    return activateFallback(deps, fileSystem, layout.userDataDirectory);
   }
   deps.setSessionDataPath(layout.profileDirectory);
   deps.setUserDataPath(layout.userDataDirectory);
+  const legacyExists = legacyProfileLeavesExist(
+    layout.machineRoot,
+    deps.legacy,
+    fileSystem,
+  );
   return {
     directory: layout.profileDirectory,
     usedFallback: false,
     guidance: null,
+    migration: legacyExists
+      ? {
+          legacyDirectory: legacyUserDirectory(layout.machineRoot, deps.legacy),
+          freshDirectory: layout.userDirectory,
+        }
+      : null,
   };
 }
 
 // Production adapter over the Electron app object. Reads PROGRAMDATA and
 // USERPROFILE from the environment (the documented convention) with the home
 // directory and OS user name as USERPROFILE fallbacks and app.getPath("appData")
-// as the blank-PROGRAMDATA fallback, then redirects BOTH Electron data paths
-// before any session is opened. These are the ONLY sanctioned
-// environment-variable reads in src/: they select a per-user data directory,
-// never a runtime override, and the no-override suite allowlists exactly these
-// variable names in this file (see test/electron/secure-host.test.mjs).
+// as the blank-PROGRAMDATA fallback, obtains the account SID, then redirects
+// BOTH Electron data paths before any session is opened. These are the ONLY
+// sanctioned environment-variable reads in src/ (the SID query reads SystemRoot
+// in windows-user-identity.ts, for the system directory only): they select a
+// per-account data directory, never a runtime override, and the no-override
+// suite allowlists exactly these variable names in this file (see
+// test/electron/secure-host.test.mjs).
 export interface ElectronProfileApp {
   getPath(name: string): string;
   setPath(name: string, value: string): void;
@@ -315,10 +305,12 @@ export function activateProductionProfile(
   return activateProfileDirectory({
     layout: {
       programDataDir: process.env.PROGRAMDATA,
+      machineRootFallback: electronApp.getPath("appData"),
+    },
+    legacy: {
       userProfile: process.env.USERPROFILE,
       homeDir: os.homedir(),
       userName: os.userInfo().username,
-      machineRootFallback: electronApp.getPath("appData"),
     },
     setSessionDataPath: (directory) => {
       electronApp.setPath(SESSION_DATA_PATH_NAME, directory);
