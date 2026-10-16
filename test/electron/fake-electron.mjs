@@ -101,8 +101,10 @@ export const session = {
 };
 
 export const dialog = {
-  showMessageBox: async () => {
+  showMessageBox: async (options) => {
     record("dialog.showMessageBox");
+    recorder.dialogs.push(options);
+    await recorder.noticePromise;
     return { response: 0 };
   },
 };

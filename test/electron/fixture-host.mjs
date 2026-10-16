@@ -25,6 +25,7 @@ import { buildWindowOptions } from "../../dist/main/window.js";
 import { installNavigationPolicy } from "../../dist/main/navigation-policy.js";
 import { installPopupPolicy } from "../../dist/main/popup-policy.js";
 import { activateProfileDirectory } from "../../dist/main/profile-path.js";
+import { resolveCurrentUserSidSync } from "../../dist/main/windows-user-identity.js";
 
 const rawArguments = process.argv.slice(1);
 const targetUrl = rawArguments.find((entry) => entry.startsWith("http"));
@@ -483,21 +484,16 @@ async function runLoadfailScenario() {
   });
 }
 
-// Builds the deterministic layout inputs for the profile/diagnostics
-// scenarios. `--user-key` pins the per-Windows-user segment (blanking the
-// path-shaped sources so the key is exactly sanitizeUserKey(<value>)); without
-// it the production derivation runs against the real environment.
-function profileLayout(programDataBase) {
-  const userKey = paramValue("user-key");
+function profileActivationInputs(programDataBase) {
+  const userKey = paramValue("user-key") ?? "probe-user";
+  const sid = paramValue("sid") ?? "S-1-5-21-1000-2000-3000-1001";
   return {
-    programDataDir: programDataBase,
-    userProfile: userKey === undefined ? process.env.USERPROFILE : "",
-    homeDir: userKey === undefined ? os.homedir() : "",
-    userName: userKey ?? os.userInfo().username,
-    machineRootFallback: path.join(
-      os.tmpdir(),
-      "ytv-profile-fallback-should-not-appear",
-    ),
+    layout: {
+      programDataDir: programDataBase,
+      machineRootFallback: path.join(os.tmpdir(), "ytv-profile-fallback"),
+    },
+    legacy: { userProfile: "", homeDir: "", userName: userKey },
+    resolveSid: () => resolveCurrentUserSidSync(() => sid),
   };
 }
 
@@ -519,7 +515,7 @@ async function runProfileScenario() {
   }
   let userDataDirectory = null;
   const activation = activateProfileDirectory({
-    layout: profileLayout(profileBase),
+    ...profileActivationInputs(profileBase),
     setSessionDataPath: (directory) => {
       app.setPath("sessionData", directory);
     },
@@ -534,6 +530,7 @@ async function runProfileScenario() {
     userDataDirectory,
     usedFallback: activation.usedFallback,
     guidance: activation.guidance,
+    migration: activation.migration,
   });
   const electronSession = session.fromPartition(IDENTITY_PARTITION);
   if (mode === "set") {
@@ -584,7 +581,7 @@ async function runDiagnosticsScenario() {
   }
   const repositoryRoot = repositoryRootFromHere();
   const activation = activateProfileDirectory({
-    layout: profileLayout(diagnosticsBase),
+    ...profileActivationInputs(diagnosticsBase),
     setSessionDataPath: (directory) => {
       app.setPath("sessionData", directory);
     },

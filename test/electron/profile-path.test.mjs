@@ -22,15 +22,18 @@ import {
 const {
   PROFILE_DIRECTORY_NAME,
   USERS_DIRECTORY_NAME,
+  SID_USERS_SEGMENT,
   PROFILE_SUBDIRECTORY_NAME,
   USER_DATA_SUBDIRECTORY_NAME,
 } = await import("../../src/main/profile-path.ts");
 
 const PROBE_USER_KEY = "probe-user";
+const PROBE_SID = "S-1-5-21-1000-2000-3000-1001";
 const PROBE_USER_DIRECTORY = path.join(
   PROFILE_DIRECTORY_NAME,
   USERS_DIRECTORY_NAME,
-  PROBE_USER_KEY,
+  SID_USERS_SEGMENT,
+  PROBE_SID,
 );
 const EXPECTED_DIRECTORY_SUFFIX = path.join(
   PROBE_USER_DIRECTORY,
@@ -58,7 +61,13 @@ function freshBase(t) {
   return base;
 }
 
-function profileArgs(base, mode, cookieUrl, userKey = PROBE_USER_KEY) {
+function profileArgs(
+  base,
+  mode,
+  cookieUrl,
+  userKey = PROBE_USER_KEY,
+  sid = PROBE_SID,
+) {
   return [
     "--scenario=profile",
     `--profile-base=${base}`,
@@ -67,6 +76,7 @@ function profileArgs(base, mode, cookieUrl, userKey = PROBE_USER_KEY) {
     "--cookie-name=ytv_persist_probe",
     "--cookie-value=persist-across-relaunch",
     `--user-key=${userKey}`,
+    `--sid=${sid}`,
   ];
 }
 
@@ -107,7 +117,7 @@ test("a cookie set in run 1 is present in run 2 against the same profile dir", a
   assert.equal(read.value, "persist-across-relaunch");
 });
 
-test("a path-hostile user key becomes one safe directory segment", async (t) => {
+test("an account-name change does not change its SID-scoped directory", async (t) => {
   const fixture = await startFixtureServer(t);
   const base = freshBase(t);
   const run = await spawnFixtureHost(
@@ -122,10 +132,109 @@ test("a path-hostile user key becomes one safe directory segment", async (t) => 
       base,
       PROFILE_DIRECTORY_NAME,
       USERS_DIRECTORY_NAME,
-      "Ada_Lovelace_1",
+      SID_USERS_SEGMENT,
+      PROBE_SID,
       PROFILE_SUBDIRECTORY_NAME,
     ),
   );
+});
+
+for (const [firstName, secondName] of [
+  ["王小明", "陳大文"],
+  ["user name", "user_name"],
+]) {
+  test(`colliding names ${firstName} and ${secondName} keep separate cookies`, async (t) => {
+    const fixture = await startFixtureServer(t);
+    const base = freshBase(t);
+    const first = await spawnFixtureHost(
+      profileArgs(base, "set", fixture.url, firstName),
+    );
+    const second = await spawnFixtureHost(
+      profileArgs(
+        base,
+        "get",
+        fixture.url,
+        secondName,
+        "S-1-5-21-1000-2000-3000-1002",
+      ),
+    );
+    assertCleanRun(first);
+    assertCleanRun(second);
+    const a = recordOf(first.records, "profile-activation");
+    const b = recordOf(second.records, "profile-activation");
+    assert.notEqual(a.directory, b.directory);
+    assert.notEqual(a.userDataDirectory, b.userDataDirectory);
+    assert.equal(recordOf(second.records, "cookie-read").value, null);
+    const relaunch = await spawnFixtureHost(
+      profileArgs(base, "get", fixture.url, firstName),
+    );
+    assertCleanRun(relaunch);
+    assert.equal(
+      recordOf(relaunch.records, "cookie-read").value,
+      "persist-across-relaunch",
+    );
+  });
+}
+
+test("legacy data is left byte-identical and never loaded as the SID profile", async (t) => {
+  const fixture = await startFixtureServer(t);
+  const base = freshBase(t);
+  const legacy = path.join(
+    base,
+    PROFILE_DIRECTORY_NAME,
+    USERS_DIRECTORY_NAME,
+    "probe-user",
+  );
+  const legacyProfile = path.join(legacy, "profile");
+  fs.mkdirSync(legacyProfile, { recursive: true });
+  const marker = path.join(legacyProfile, "untouched.bin");
+  const bytes = Buffer.from([0, 1, 2, 255, 128]);
+  fs.writeFileSync(marker, bytes);
+
+  const run = await spawnFixtureHost(profileArgs(base, "get", fixture.url));
+
+  assertCleanRun(run);
+  const activation = recordOf(run.records, "profile-activation");
+  assert.deepEqual(activation.migration, {
+    legacyDirectory: legacy,
+    freshDirectory: path.dirname(activation.directory),
+  });
+  assert.deepEqual(fs.readFileSync(marker), bytes);
+  assert.equal(
+    fs.existsSync(path.join(activation.directory, "untouched.bin")),
+    false,
+  );
+  assert.equal(recordOf(run.records, "cookie-read").value, null);
+});
+
+test("identity failure uses new temporary directories and never reuses a cookie", async (t) => {
+  const fixture = await startFixtureServer(t);
+  const base = freshBase(t);
+  const fallbacks = [];
+  t.after(() => {
+    for (const directory of fallbacks)
+      fs.rmSync(directory, { recursive: true, force: true });
+  });
+  const first = await spawnFixtureHost(
+    profileArgs(base, "set", fixture.url, "probe-user", "invalid-sid"),
+  );
+  const a = recordOf(first.records, "profile-activation");
+  fallbacks.push(path.dirname(a.directory));
+  assertCleanRun(first);
+  const second = await spawnFixtureHost(
+    profileArgs(base, "get", fixture.url, "probe-user", "invalid-sid"),
+  );
+  const b = recordOf(second.records, "profile-activation");
+  fallbacks.push(path.dirname(b.directory));
+  assertCleanRun(second);
+  assert.equal(a.usedFallback, true);
+  assert.equal(b.usedFallback, true);
+  assert.equal(a.migration, null);
+  assert.equal(b.migration, null);
+  assert.notEqual(a.directory, b.directory);
+  assert.notEqual(a.userDataDirectory, b.userDataDirectory);
+  assert.equal(recordOf(second.records, "cookie-read").value, null);
+  assert.equal(fs.existsSync(base), false);
 });
 
 test("a corrupt base falls back to a safe new profile with guidance", async (t) => {
