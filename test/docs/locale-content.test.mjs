@@ -24,6 +24,7 @@ const manifest = require(path.join(repositoryRoot, "package.json"));
 const { SUPPORT_RELEASE_URL } = await import("../../src/main/dialogs.ts");
 const {
   PROFILE_DIRECTORY_NAME,
+  SID_USERS_SEGMENT,
   USERS_DIRECTORY_NAME,
   PROFILE_SUBDIRECTORY_NAME,
 } = await import("../../src/main/profile-path.ts");
@@ -119,7 +120,7 @@ test("the documented profile path matches profile-path.ts", () => {
   // leaf, all derived from the resolver's own exported names.
   const documentedPath =
     `%PROGRAMDATA%\\${PROFILE_DIRECTORY_NAME}\\${USERS_DIRECTORY_NAME}` +
-    `\\<key>\\${PROFILE_SUBDIRECTORY_NAME}`;
+    `\\${SID_USERS_SEGMENT}\\<SID>\\${PROFILE_SUBDIRECTORY_NAME}`;
   for (const half of [zhHalf, enHalf]) {
     assert.ok(
       half.includes(documentedPath),
@@ -144,7 +145,7 @@ test("the documented support URL matches dialogs.ts", () => {
 const MACHINE_INSTALL_ROOT = `C:\\Program Files\\${manifest.build.productName}`;
 const MACHINE_DATA_ROOT = `C:\\ProgramData\\${PROFILE_DIRECTORY_NAME}`;
 const ENV_DATA_ROOT = `%PROGRAMDATA%\\${PROFILE_DIRECTORY_NAME}`;
-const PER_USER_ROOT = `${ENV_DATA_ROOT}\\${USERS_DIRECTORY_NAME}\\<key>`;
+const PER_USER_ROOT = `${ENV_DATA_ROOT}\\${USERS_DIRECTORY_NAME}\\${SID_USERS_SEGMENT}\\<SID>`;
 
 test("both halves name the install root, the UAC step, and the data root", () => {
   for (const half of [zhHalf, enHalf]) {

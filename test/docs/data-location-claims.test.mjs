@@ -30,7 +30,7 @@ const repositoryRoot = path.resolve(
   "..",
 );
 
-const { PROFILE_DIRECTORY_NAME, USERS_DIRECTORY_NAME } =
+const { PROFILE_DIRECTORY_NAME, SID_USERS_SEGMENT, USERS_DIRECTORY_NAME } =
   await import("../../src/main/profile-path.ts");
 
 const DOCS = ["README.md", "docs/privacy.md"];
@@ -54,7 +54,7 @@ function splitHalves(relativePath) {
 // directory names come from the resolver, the environment roots are Windows
 // facts, and `<key>` is the per-user segment the resolver builds.
 const NORMAL_DATA_ROOT = `%PROGRAMDATA%\\${PROFILE_DIRECTORY_NAME}`;
-const APPDATA_FALLBACK_ROOT = `%APPDATA%\\${PROFILE_DIRECTORY_NAME}\\${USERS_DIRECTORY_NAME}\\<key>`;
+const APPDATA_FALLBACK_ROOT = `%APPDATA%\\${PROFILE_DIRECTORY_NAME}\\${USERS_DIRECTORY_NAME}\\${SID_USERS_SEGMENT}\\<SID>`;
 const TEMP_FALLBACK_ROOT = "%LOCALAPPDATA%\\Temp";
 const TEMP_FALLBACK_PREFIX = `${PROFILE_DIRECTORY_NAME}-profile-`;
 

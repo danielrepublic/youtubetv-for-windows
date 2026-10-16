@@ -1,7 +1,10 @@
 Status: passed
 
 Scope: pre-upgrade user attestation, recorded with v0.1.0 installed. Sign-in
-on v0.1.1 has not been re-verified.
+on v0.1.1 has not been re-verified. The per-user identity/layout change in
+issue #1 (SID-keyed `users\by-sid\<SID>`) postdates this attestation: live
+sign-in on the SID layout has NOT been re-verified, and this record certifies
+no build after the change.
 
 # Live sign-in certification (release gate)
 
@@ -74,7 +77,7 @@ Diagnostics are OPT-IN and OFF by default. The switch is one sentinel file
 read once at startup:
 
 ```
-%PROGRAMDATA%\youtubetv-for-windows\users\<key>\diagnostics\ENABLED
+%PROGRAMDATA%\youtubetv-for-windows\users\by-sid\<SID>\diagnostics\ENABLED
 ```
 
 When that file is absent, the app wires no listeners at all: navigation,
@@ -82,13 +85,14 @@ user-agent, popup and security behavior are byte-identical to a non-diagnostic
 build. When it exists, the app appends JSON Lines to:
 
 ```
-%PROGRAMDATA%\youtubetv-for-windows\users\<key>\diagnostics\
+%PROGRAMDATA%\youtubetv-for-windows\users\by-sid\<SID>\diagnostics\
     diagnostic-<YYYYMMDDThhmmssSSSZ>-p<pid>-<instance>.jsonl
 ```
 
-`<key>` is the Windows user name taken from the basename of `%USERPROFILE%`,
-sanitized to `[A-Za-z0-9._-]`; step 2 below derives it exactly. The root holding
-it is the machine-wide data tree `C:\ProgramData\youtubetv-for-windows`
+`<SID>` is the Windows user's security identifier, the stable per-account value
+the app now uses for the per-user directory (the layout is
+`users\by-sid\<SID>`); step 2 below derives it exactly. The root holding it is
+the machine-wide data tree `C:\ProgramData\youtubetv-for-windows`
 (`%PROGRAMDATA%\youtubetv-for-windows`), which the installer creates and ACLs at
 install time; a live capture has to land in that tree on the certified machine.
 
@@ -141,11 +145,12 @@ Google account (2FA phone available), and a build of this repository.
 2. Optionally enable diagnostics:
 
    ```powershell
-   # The app's per-Windows-user key: basename of %USERPROFILE%, sanitized to
-   # [A-Za-z0-9._-] (src/main/profile-path.ts: sanitizeUserKey). The
-   # parentheses matter: -replace is an operator, not a Split-Path argument.
-   $key = (Split-Path -Leaf $env:USERPROFILE) -replace '[^A-Za-z0-9._-]', '_'
-   $dir = Join-Path $env:ProgramData "youtubetv-for-windows\users\$key\diagnostics"
+   # The app's per-Windows-user directory is now keyed by the Windows user SID
+   # (src/main/windows-user-identity.ts resolves it; the layout is
+   # users\by-sid\<SID>). GetCurrent().User.Value returns exactly the SID the app
+   # persists, so a live capture lands in the same tree the app writes.
+   $sid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+   $dir = Join-Path $env:ProgramData "youtubetv-for-windows\users\by-sid\$sid\diagnostics"
    New-Item -ItemType Directory -Force $dir | Out-Null
    New-Item -ItemType File -Force (Join-Path $dir "ENABLED") | Out-Null
    ```
@@ -243,6 +248,11 @@ Google account (2FA phone available), and a build of this repository.
   separately from the repository version. No logs or screenshots were provided; the user accepts
   visual attestation instead of the earlier mandatory JSONL requirement for
   this certification. Phone pairing remains a separate, uncertified gate.
+- 2026-10-16 — issue #1 layout update: the per-user directory moved to
+  `users\by-sid\<SID>` keyed by the Windows security identifier. This changes
+  the profile path, so the earlier `passed` attestation no longer covers the
+  current build; live sign-in on the SID layout is NOT re-verified here. Re-run
+  the procedure above on the new layout before claiming `passed` for it.
 
 ## Phone pairing follow-up (separate release gate)
 
