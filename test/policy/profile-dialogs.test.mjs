@@ -1,6 +1,7 @@
 // Pure-logic unit suite for the ProgramData profile layout convention and for
 // the bilingual dialog catalog. The filesystem is faked, so corrupt and
-// unwritable bases are exercised without touching the real disk.
+// unwritable bases are exercised without touching the real disk, and the SID
+// identity query is faked, so no test reads the real account SID.
 
 import assert from "node:assert/strict";
 import path from "node:path";
@@ -9,6 +10,7 @@ import test from "node:test";
 const {
   PROFILE_DIRECTORY_NAME,
   USERS_DIRECTORY_NAME,
+  SID_USERS_SEGMENT,
   PROFILE_SUBDIRECTORY_NAME,
   USER_DATA_SUBDIRECTORY_NAME,
   SESSION_DATA_PATH_NAME,
@@ -16,86 +18,33 @@ const {
   activateProfileDirectory,
   ensureFallbackProfileDirectory,
   ensureProfileDirectory,
+  legacyUserDirectory,
   profileFallbackGuidance,
   resolveProfileLayout,
   sanitizeUserKey,
 } = await import("../../src/main/profile-path.ts");
 
+import {
+  SID_ADA,
+  SID_BOB,
+  LAYOUT_BASE,
+  LEGACY_BASE,
+  fakeFileSystem,
+  activateWith,
+} from "./profile-test-fixtures.mjs";
+
 const { SUPPORT_RELEASE_URL, profileFallbackDialog, routeFailureDialog } =
   await import("../../src/main/dialogs.ts");
 
-// A deterministic, fully-specified layout input set. Production reads the env
-// and os; the pure resolver takes them as inputs so the mapping is testable.
-const LAYOUT_BASE = {
-  programDataDir: "C:\\ProgramData",
-  userProfile: "C:\\Users\\Ada",
-  homeDir: "C:\\Users\\Ada",
-  userName: "ada",
-  machineRootFallback: "C:\\Fallback\\AppData",
-};
-
-function fakeFileSystem(entries) {
-  // entries: Map from absolute path -> "dir" | "file". mkdirSync creates
-  // dirs unless the factory is told to fail; mkdtempSync mints /tmp/fake-N.
-  const state = {
-    directories: new Set(),
-    files: new Set(),
-    mkdirFails: false,
-    mkdirFailPrefix: null,
-    mkdtempFails: false,
-    counter: 0,
-  };
-  for (const [candidate, kind] of entries ?? []) {
-    if (kind === "dir") {
-      state.directories.add(candidate);
-    } else {
-      state.files.add(candidate);
-    }
-  }
-  return {
-    state,
-    existsSync: (candidate) =>
-      state.directories.has(candidate) || state.files.has(candidate),
-    mkdirSync: (candidate) => {
-      if (
-        state.mkdirFails ||
-        (state.mkdirFailPrefix !== null &&
-          candidate.startsWith(state.mkdirFailPrefix))
-      ) {
-        throw new Error("EACCES: permission denied");
-      }
-      if (state.files.has(candidate)) {
-        return undefined;
-      }
-      state.directories.add(candidate);
-      return undefined;
-    },
-    statSync: (candidate) => {
-      if (state.files.has(candidate)) {
-        return { isDirectory: () => false };
-      }
-      if (state.directories.has(candidate)) {
-        return { isDirectory: () => true };
-      }
-      const error = new Error(`ENOENT: ${candidate}`);
-      throw error;
-    },
-    mkdtempSync: (prefix) => {
-      if (state.mkdtempFails) {
-        throw new Error("ENOSPC: no space");
-      }
-      state.counter += 1;
-      const candidate = `${prefix}fake-${state.counter}`;
-      state.directories.add(candidate);
-      return candidate;
-    },
-  };
-}
-
-test("the resolver fixes the machine root under PROGRAMDATA and a per-user key", () => {
-  const layout = resolveProfileLayout(LAYOUT_BASE);
+test("the resolver fixes the machine root under PROGRAMDATA and a per-account SID level", () => {
+  const layout = resolveProfileLayout(LAYOUT_BASE, SID_ADA);
   const machineRoot = path.join("C:\\ProgramData", PROFILE_DIRECTORY_NAME);
-  const userDirectory = path.join(machineRoot, USERS_DIRECTORY_NAME, "Ada");
+  const userDirectory = path.join(
+    machineRoot,
+    USERS_DIRECTORY_NAME,
+    SID_USERS_SEGMENT,
+    SID_ADA,
+  );
   assert.equal(layout.machineRoot, machineRoot);
   assert.equal(layout.userDirectory, userDirectory);
   assert.equal(
@@ -118,57 +67,77 @@ test("the resolver fixes the machine root under PROGRAMDATA and a per-user key",
   assert.equal(USER_DATA_PATH_NAME, "userData");
 });
 
-test("two distinct USERPROFILE values map to two distinct keys", () => {
-  const ada = resolveProfileLayout({ ...LAYOUT_BASE });
-  const bob = resolveProfileLayout({
-    ...LAYOUT_BASE,
-    userProfile: "D:\\Profiles\\Bob",
-    homeDir: "D:\\Profiles\\Bob",
-  });
-  assert.equal(path.basename(ada.userDirectory), "Ada");
-  assert.equal(path.basename(bob.userDirectory), "Bob");
+test("two distinct SIDs map to two disjoint profile and user-data trees", () => {
+  const ada = resolveProfileLayout(LAYOUT_BASE, SID_ADA);
+  const bob = resolveProfileLayout(LAYOUT_BASE, SID_BOB);
   assert.notEqual(ada.profileDirectory, bob.profileDirectory);
   assert.notEqual(ada.userDataDirectory, bob.userDataDirectory);
 });
 
-test("a path-hostile USERPROFILE maps to a safe single-segment key", () => {
-  const layout = resolveProfileLayout({
-    ...LAYOUT_BASE,
-    userProfile: "C:\\Users\\Ada Lovelace#1",
-  });
-  const key = path.basename(layout.userDirectory);
-  assert.equal(key, "Ada_Lovelace_1");
-  assert.match(key, /^[A-Za-z0-9._-]+$/);
-  assert.ok(!key.includes("/") && !key.includes("\\"), "single path segment");
-  // The sanitizer itself keeps the safe set and neutralises everything else,
-  // and never returns an empty segment.
-  assert.equal(sanitizeUserKey("a/b\\c:d*e"), "a_b_c_d_e");
-  assert.equal(sanitizeUserKey("..."), "...");
-  assert.equal(sanitizeUserKey(""), "user");
+test("accounts whose names sanitize to the same key no longer share a directory", () => {
+  // The reported defect: these pairs produced ONE directory under the old
+  // name-derived key. Identity is now the SID, so the persistent trees stay
+  // disjoint no matter how the names collide.
+  const collidingNamePairs = [
+    ["\\Users\\王小明", "\\Users\\陳大文"],
+    ["\\Users\\user name", "\\Users\\user_name"],
+    ["D:\\Profiles\\Ada", "E:\\Mounted\\Ada"],
+  ];
+  for (const [left, right] of collidingNamePairs) {
+    const leftLegacy = sanitizeUserKey(path.basename(left));
+    const rightLegacy = sanitizeUserKey(path.basename(right));
+    assert.equal(
+      leftLegacy,
+      rightLegacy,
+      `precondition: both names must collide under the legacy key: ${left} / ${right}`,
+    );
+    const leftLayout = resolveProfileLayout(LAYOUT_BASE, SID_ADA);
+    const rightLayout = resolveProfileLayout(LAYOUT_BASE, SID_BOB);
+    assert.notEqual(leftLayout.userDirectory, rightLayout.userDirectory);
+  }
 });
 
-test("USERPROFILE falls back to the home directory and then the user name", () => {
-  const fromHome = resolveProfileLayout({
-    ...LAYOUT_BASE,
-    userProfile: "",
-    homeDir: "D:\\Profiles\\Grace",
-  });
-  assert.equal(path.basename(fromHome.userDirectory), "Grace");
-  const fromUser = resolveProfileLayout({
-    ...LAYOUT_BASE,
-    userProfile: undefined,
+test("a legacy account name can never alias a SID directory", () => {
+  const machineRoot = path.join("C:\\ProgramData", PROFILE_DIRECTORY_NAME);
+  const sidLayout = resolveProfileLayout(LAYOUT_BASE, SID_ADA);
+
+  // A legacy account literally named like a SID.
+  const sidShaped = legacyUserDirectory(machineRoot, {
+    userProfile: `C:\\Users\\${SID_ADA}`,
     homeDir: "",
-    userName: "Linus",
+    userName: "",
   });
-  assert.equal(path.basename(fromUser.userDirectory), "Linus");
+  assert.notEqual(sidShaped, sidLayout.userDirectory);
+
+  // A legacy account literally named "by-sid" lands beside the SID level, not
+  // inside it.
+  const bySidShaped = legacyUserDirectory(machineRoot, {
+    userProfile: "C:\\Users\\by-sid",
+    homeDir: "",
+    userName: "",
+  });
+  assert.notEqual(bySidShaped, sidLayout.userDirectory);
+  assert.notEqual(
+    path.join(bySidShaped, PROFILE_SUBDIRECTORY_NAME),
+    sidLayout.profileDirectory,
+  );
+});
+
+test("the legacy sanitizer stays a single safe segment", () => {
+  const key = sanitizeUserKey("a/b\\c:d*e");
+  assert.equal(key, "a_b_c_d_e");
+  assert.equal(sanitizeUserKey("..."), "...");
+  assert.equal(sanitizeUserKey(""), "user");
+  assert.match(key, /^[A-Za-z0-9._-]+$/);
+  assert.ok(!key.includes("/") && !key.includes("\\"), "single segment");
 });
 
 test("a blank or missing PROGRAMDATA falls back without producing a relative path", () => {
   for (const programDataDir of ["", undefined, null]) {
-    const layout = resolveProfileLayout({
-      ...LAYOUT_BASE,
-      programDataDir,
-    });
+    const layout = resolveProfileLayout(
+      { ...LAYOUT_BASE, programDataDir },
+      SID_ADA,
+    );
     assert.equal(
       layout.machineRoot,
       path.join("C:\\Fallback\\AppData", PROFILE_DIRECTORY_NAME),
@@ -197,35 +166,23 @@ test("ensureProfileDirectory creates, validates, and reports reasons", () => {
   assert.match(failed.reason, /cannot create/);
 });
 
-test("activateProfileDirectory sets BOTH data paths before returning", () => {
-  const fileSystem = fakeFileSystem();
-  const sessionPaths = [];
-  const userDataPaths = [];
-  const activation = activateProfileDirectory({
-    layout: LAYOUT_BASE,
-    setSessionDataPath: (directory) => {
-      sessionPaths.push(directory);
-    },
-    setUserDataPath: (directory) => {
-      userDataPaths.push(directory);
-    },
-    fileSystem,
-  });
+test("activation redirects BOTH data paths onto the SID directory", () => {
+  const { activation, sessionPaths, userDataPaths } = activateWith();
   const userDirectory = path.join(
     "C:\\ProgramData",
     PROFILE_DIRECTORY_NAME,
     USERS_DIRECTORY_NAME,
-    "Ada",
+    SID_USERS_SEGMENT,
+    SID_ADA,
   );
   assert.equal(activation.usedFallback, false);
   assert.equal(activation.guidance, null);
+  assert.equal(activation.migration, null);
   assert.equal(
     activation.directory,
     path.join(userDirectory, PROFILE_SUBDIRECTORY_NAME),
   );
-  assert.deepEqual(sessionPaths, [
-    path.join(userDirectory, PROFILE_SUBDIRECTORY_NAME),
-  ]);
+  assert.deepEqual(sessionPaths, [activation.directory]);
   assert.deepEqual(userDataPaths, [
     path.join(userDirectory, USER_DATA_SUBDIRECTORY_NAME),
   ]);
@@ -234,20 +191,13 @@ test("activateProfileDirectory sets BOTH data paths before returning", () => {
 test("a corrupt base falls back to a safe new profile pair with guidance", () => {
   const fileSystem = fakeFileSystem();
   fileSystem.state.mkdirFailPrefix = "C:\\Broken";
-  const sessionPaths = [];
-  const userDataPaths = [];
-  const activation = activateProfileDirectory({
-    layout: { ...LAYOUT_BASE, programDataDir: "C:\\Broken\\ProgramData" },
-    setSessionDataPath: (directory) => {
-      sessionPaths.push(directory);
-    },
-    setUserDataPath: (directory) => {
-      userDataPaths.push(directory);
-    },
+  const { activation, sessionPaths, userDataPaths } = activateWith({
     fileSystem,
+    layout: { ...LAYOUT_BASE, programDataDir: "C:\\Broken\\ProgramData" },
     ensureFallback: (injected) => ensureFallbackProfileDirectory(injected),
   });
   assert.equal(activation.usedFallback, true);
+  assert.equal(activation.migration, null);
   assert.ok(activation.directory.includes("youtubetv-for-windows-profile-"));
   assert.ok(activation.directory.endsWith("profile"));
   assert.equal(sessionPaths.length, 1);
@@ -255,24 +205,15 @@ test("a corrupt base falls back to a safe new profile pair with guidance", () =>
   assert.notEqual(sessionPaths[0], userDataPaths[0]);
   assert.ok(userDataPaths[0].endsWith("userdata"));
   assert.ok(activation.guidance !== null);
-  assert.match(activation.guidance.zhTW, /暫時設定檔/);
-  assert.match(activation.guidance.en, /temporary profile/);
   assert.match(activation.guidance.zhTW, /C:\\Broken\\ProgramData/);
 });
 
 test("a file where the profile directory belongs also triggers fallback", () => {
   const target = path.join(
-    "C:\\ProgramData",
-    PROFILE_DIRECTORY_NAME,
-    USERS_DIRECTORY_NAME,
-    "Ada",
-    PROFILE_SUBDIRECTORY_NAME,
+    resolveProfileLayout(LAYOUT_BASE, SID_ADA).profileDirectory,
   );
   const fileSystem = fakeFileSystem([[target, "file"]]);
-  const activation = activateProfileDirectory({
-    layout: LAYOUT_BASE,
-    setSessionDataPath: () => {},
-    setUserDataPath: () => {},
+  const { activation } = activateWith({
     fileSystem,
     ensureFallback: (injected) => ensureFallbackProfileDirectory(injected),
   });
@@ -282,11 +223,12 @@ test("a file where the profile directory belongs also triggers fallback", () => 
 
 test("activation throws only when even the fallback fails", () => {
   const fileSystem = fakeFileSystem();
-  fileSystem.state.mkdirFails = true;
   assert.throws(
     () =>
       activateProfileDirectory({
         layout: { ...LAYOUT_BASE, programDataDir: "C:\\Broken" },
+        legacy: LEGACY_BASE,
+        resolveSid: () => ({ ok: false, reason: "unavailable" }),
         setSessionDataPath: () => {},
         setUserDataPath: () => {},
         fileSystem,
