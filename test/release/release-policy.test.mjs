@@ -132,10 +132,19 @@ function validateReleaseWorkflow(source) {
       "npm run test:unit",
       "npm run lint",
       "npm run format:check",
+      "npm run test:electron",
       "npm run package",
       "npm run verify:artifacts",
     ].some((command) => !publish?.includes(command)),
     "publish must install, verify, package, and verify artifacts before release creation",
+    failures,
+  );
+  failureIf(
+    (publish?.indexOf("npm run test:electron") ?? -1) < 0 ||
+      (publish?.indexOf("npm run package") ?? -1) < 0 ||
+      publish.indexOf("npm run test:electron") >
+        publish.indexOf("npm run package"),
+    "publish must run the Electron gate before packaging",
     failures,
   );
   failureIf(
@@ -275,6 +284,22 @@ test("each required workflow policy defect fails in a byte-restored scratch copy
       "required verification command",
       (source) => replaceOnce(source, "npm run lint", "npm lint"),
       /must install, verify, package, and verify artifacts/,
+    ],
+    [
+      "electron verification gate",
+      (source) =>
+        replaceOnce(source, "npm run test:electron", "npm lint:electron"),
+      /must install, verify, package, and verify artifacts/,
+    ],
+    [
+      "electron gate ordering",
+      (source) =>
+        replaceOnce(
+          source,
+          "          npm run test:electron\n          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }\n          npm run package",
+          "          npm run package",
+        ),
+      /must run the Electron gate before packaging/,
     ],
     [
       "ordered plain-release steps",
