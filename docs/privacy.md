@@ -13,7 +13,7 @@
 - 例外一：`%PROGRAMDATA%` 沒有值或是空字串的時候，資料根目錄退到 `%APPDATA%\youtubetv-for-windows\users\by-sid\<SID>`，這一次的設定檔與使用者資料就寫在你的個人資料夾裡。
 - 例外二：資料根目錄不能建立或不能使用（權限不足、磁碟滿、路徑被別的檔案佔掉），或程式取不到你 Windows 帳號的身分識別（SID）的時候，程式會用 Windows 暫存資料夾 `%LOCALAPPDATA%\Temp` 底下的一個全新目錄（名稱是 `youtubetv-for-windows-profile-` 開頭，後面接一段隨機字元）當作暫時設定檔啟動，並跳一個視窗告訴你資料改放在哪裡。取不到 SID 時不會改用帳號名稱當路徑，以免兩個帳號共用同一份設定檔。這一次開啟的登入狀態不會保留，下次啟動會是一個全新的設定檔。
 - 這兩個例外用的目錄，解除安裝都不會刪掉。手動刪掉是安全的，程式下次啟動會自己重新建立需要的部分。
-- 這個根目錄的權限：Windows 預設只有系統管理員寫得進 `C:\ProgramData`，所以安裝程式把本機 `Users` 群組對這個資料根目錄設成可讀寫。實話說，這代表同一台電腦上的其他本機帳號在技術上也讀得到這個樹裡的檔案，這是整台電腦共用一個安裝的副作用。要說清楚的是：把每個使用者分到 `by-sid\<SID>` 只是路徑上的隔離，並不會改變這裡的 NTFS 權限；權限收緊是另一件事，追蹤在 https://github.com/danielrepublic/youtubetv-for-windows/issues/2 。
+- 這個根目錄的權限：Windows 預設只有系統管理員寫得進 `C:\ProgramData`，所以安裝程式把本機 `Users` 群組對這個資料根目錄設成可讀寫。實話說，這代表同一台電腦上的其他本機帳號在技術上也讀得到這個樹裡的檔案，這是整台電腦共用一個安裝的副作用。要說清楚的是：共用的只有資料根目錄與 `by-sid` 這一層（讓每個使用者都能建立自己的子資料夾）；每個使用者自己的目錄 `users\by-sid\<SID>` 會由程式在啟動時收緊權限，只允許該使用者本人、SYSTEM 與 Administrators 存取，同一台電腦的其他本機帳號無法讀取或修改這個目錄。
 
 ### 這個程式會存什麼
 
@@ -56,7 +56,7 @@
 - Blank `%PROGRAMDATA%`: when that environment variable has no value or is an empty string, the data root falls back to `%APPDATA%\youtubetv-for-windows\users\by-sid\<SID>`, so that start writes the profile and the user data inside your user profile folder.
 - Unusable data root or unavailable identity: when the data root cannot be created or used (not enough permissions, a full disk, a path taken by some other file), or when the app cannot obtain your Windows user security identifier (SID), the app starts with a temporary profile in a brand-new directory under the Windows temp folder `%LOCALAPPDATA%\Temp` (named `youtubetv-for-windows-profile-` followed by a run of random characters) and shows you a window saying where the data went. It never falls back to an account-name path when the SID is unavailable, so two accounts cannot share one profile. Sign-in state does not persist for that start; the next start is a fresh profile.
 - Uninstall does not delete either of those fallback locations. Deleting either one by hand is safe, because the app recreates what it needs on the next start.
-- Who can read that root: Windows normally allows writes in `C:\ProgramData` for administrators only, so the installer grants the local `Users` group modify access to the data root. To be straight about it, that means other local accounts on the same PC can technically read the files in that tree. That is a side effect of the machine-wide install. To be clear: splitting users into `by-sid\<SID>` is only a path separation and does not change those NTFS permissions; tightening them is a separate change, tracked at https://github.com/danielrepublic/youtubetv-for-windows/issues/2 .
+- Who can read that root: Windows normally allows writes in `C:\ProgramData` for administrators only, so the installer grants the local `Users` group modify access to the data root. To be straight about it, that means other local accounts on the same PC can technically read the files in that tree. That is a side effect of the machine-wide install. To be clear: only the shared data root and the `by-sid` level are common (so each user can create their own subdirectory); each user's own directory `users\by-sid\<SID>` is tightened by the app at startup so that only that user, SYSTEM, and Administrators can access it, and other local accounts on the same PC cannot read or modify it.
 
 ### What the app stores
 

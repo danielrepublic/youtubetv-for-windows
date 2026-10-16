@@ -150,7 +150,7 @@ youtubetv-for-windows 已安裝 / Already installed
 - 使用者資料：`%PROGRAMDATA%\youtubetv-for-windows\users\by-sid\<SID>\userdata`（Electron 的快取與設定）。
 - 診斷紀錄（預設關閉）：`%PROGRAMDATA%\youtubetv-for-windows\users\by-sid\<SID>\diagnostics`。
 
-放在這裡有兩個好處：每個 Windows 使用者各有自己的子資料夾，兩個人不會共用同一份登入狀態；資料根目錄不在你的個人資料夾裡，所以換帳號或重灌系統時比較容易整棵一起處理。`C:\ProgramData` 預設只有系統管理員寫得進去，所以安裝程式會把這個資料根目錄的權限開放給本機的 Users 群組。要說清楚的是：把每個使用者分到 `by-sid\<SID>` 只是路徑上的隔離，並不會改變 NTFS 檔案權限。權限是設在資料根目錄上，所以同一台電腦的其他本機帳號在檔案系統層面仍然讀得到這棵樹；把權限收緊是另一件事，追蹤在 https://github.com/danielrepublic/youtubetv-for-windows/issues/2 。
+放在這裡有兩個好處：每個 Windows 使用者各有自己的子資料夾，兩個人不會共用同一份登入狀態；資料根目錄不在你的個人資料夾裡，所以換帳號或重灌系統時比較容易整棵一起處理。`C:\ProgramData` 預設只有系統管理員寫得進去，所以安裝程式會把這個資料根目錄的權限開放給本機的 Users 群組。要說清楚的是：共用的只有資料根目錄與 `by-sid` 這一層（讓每個使用者都能建立自己的子資料夾）；每個使用者自己的目錄 `users\by-sid\<SID>` 會由程式在啟動時收緊權限，只允許該使用者本人、SYSTEM 與 Administrators 存取，同一台電腦的其他本機帳號無法讀取或修改它。
 
 平常啟動時，上面列的整棵資料樹就是全部的落點：設定檔、使用者資料與診斷紀錄都寫在 `%PROGRAMDATA%\youtubetv-for-windows` 底下，`%APPDATA%` 與 `%LOCALAPPDATA%` 都不會被寫入（見「解除安裝會刪掉什麼」）。程式有兩個例外，什麼時候會用到由程式自己判斷：
 
@@ -316,7 +316,7 @@ Your data lives under the machine-wide data root `C:\ProgramData\youtubetv-for-w
 - User data: `%PROGRAMDATA%\youtubetv-for-windows\users\by-sid\<SID>\userdata` (Electron's caches and settings).
 - Diagnostics (off by default): `%PROGRAMDATA%\youtubetv-for-windows\users\by-sid\<SID>\diagnostics`.
 
-Two reasons it sits there. Each Windows user gets their own subdirectory, so two people on one PC never share a sign-in state. And the data root is not inside your user profile folder, which makes it easier to handle as one tree when you change accounts or reinstall Windows. `C:\ProgramData` normally allows writes for administrators only, so the installer grants the local Users group access to that data root. To be clear: splitting users into `by-sid\<SID>` is only a path separation and does not change NTFS file permissions. The ACL sits on the data root, so other local accounts on the same PC can still read the tree at the filesystem level; tightening those permissions is a separate change, tracked at https://github.com/danielrepublic/youtubetv-for-windows/issues/2 .
+Two reasons it sits there. Each Windows user gets their own subdirectory, so two people on one PC never share a sign-in state. And the data root is not inside your user profile folder, which makes it easier to handle as one tree when you change accounts or reinstall Windows. `C:\ProgramData` normally allows writes for administrators only, so the installer grants the local Users group access to that data root. To be clear: only the shared data root and the `by-sid` level are common (so each user can create their own subdirectory); each user's own directory `users\by-sid\<SID>` is tightened by the app at startup so that only that user, SYSTEM, and Administrators can access it, and other local accounts on the same PC cannot read or modify it.
 
 On a normal start, the whole tree listed above is the only place anything is written: the profile, the user data and the diagnostic logs all go under `%PROGRAMDATA%\youtubetv-for-windows`, and neither `%APPDATA%` nor `%LOCALAPPDATA%` is written to (see "What uninstall removes"). The app has two exceptions, and it decides for itself when each one applies:
 
