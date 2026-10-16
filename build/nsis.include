@@ -147,8 +147,9 @@
 ; WHY AN EXPLICIT RIGHTS SET AND NOT THE SIMPLE RIGHT `M`: measured on this
 ; machine, `icacls ... (OI)(CI)M` decodes to access mask 0x1301BF, and
 ; 0x1301BF is 0x1FF minus 0x40 - FILE_DELETE_CHILD is NOT in it. The rights
-; set below decodes to 0x1301FF, which is exactly that mask plus 0x40, and
-; icacls's own renderer reduces it back to `(M,DC)`.
+; set below names exactly that Modify set bit by bit
+; (S,DE,RC,RD,WD,AD,REA,WEA,X,RA,WA), decodes to the same 0x1301BF, and
+; icacls's own renderer reduces it back to `(M)`.
 ;
 ; WHY THE GRANT IS THERE AT ALL, IN THE HONEST MEASURED TERMS. The app runs as
 ; a standard user and has to CREATE `users\<key>\profile` and `userdata` under a
@@ -191,20 +192,29 @@
 ;   release-evidence/installer-mode/todo13-real/run-20260930-2225-acl-justification/07-what-authorises-the-create.log
 ;
 ; WHAT THE GRANT IS *NOT*, CORRECTED AGAINST MEASUREMENT. FILE_DELETE_CHILD is
-; NOT behaviourally load-bearing, and the claim that it was - "a standard user
-; cannot delete a child outright" - is REFUTED and withdrawn. Run against a
+; NOT carried, and the claim that it was needed - "a standard user cannot
+; delete a child outright" - is REFUTED and withdrawn. Run against a
 ; grant-absent tree carrying the installed tree's real shape and ACL, a Medium
 ; token completed 11 of the same 12 probe operations, and the 12th (single-call
-; removal of a NON-EMPTY directory) fails with ENOTEMPTY under THIS grant too,
-; because NTFS refuses a non-empty directory regardless of the caller's rights.
-; The inherited CREATOR OWNER ACE `(A;OICIIO;GA;;;CO)` explains the 11: every
-; object the app creates is owned by the app's own user, so the token already
-; holds GENERIC_ALL on it. DC is carried because this set is "Modify, named bit
-; by bit", NOT because any operation needs it; naming every bit is what keeps
-; WRITE_DAC and WRITE_OWNER out and what survives a future redefinition of `M`.
-; Every object the app writes is app-created (customInstall below creates only
-; the root), so the app-created class is the one that matters and it does not
-; need DC.
+; removal of a NON-EMPTY directory) fails with ENOTEMPTY under a grant WITH
+; delete-child too, because NTFS refuses a non-empty directory regardless of
+; the caller's rights. The inherited CREATOR OWNER ACE `(A;OICIIO;GA;;;CO)`
+; explains the 11: every object the app creates is owned by the app's own
+; user, so the token already holds GENERIC_ALL on it. DC is left OUT because
+; no operation the app performs needs it; naming every remaining bit is what
+; keeps WRITE_DAC and WRITE_OWNER out and what survives a future redefinition
+; of `M`. Every object the app writes is app-created (customInstall below
+; creates only the root), so the app-created class is the one that matters
+; and it does not need DC.
+;
+; WHY THE GRANT IS ROOT-ONLY (NO /T). Each per-SID directory is hardened at
+; runtime by the app itself (see src/main/profile-acl.ts) with a protected
+; DACL naming only SYSTEM, Administrators, and the owning user. A tree-walking
+; grant (`/T`) would descend into those protected subtrees on every reinstall
+; and re-add a Users ACE to each of them, undoing exactly that hardening. The
+; grant below therefore applies to the root alone: newly created children
+; inherit it through (OI)(CI), while already-hardened per-SID subtrees are
+; never re-opened.
 ;
 ; WHY NOT THE SIMPLE RIGHT `F`: `F` decodes to 0x1F01FF, the full-access mask,
 ; which carries WRITE_DAC (0x40000) and WRITE_OWNER (0x80000). Granting those
@@ -293,15 +303,16 @@
 ; files/registry/shortcuts exist. It creates the machine-wide application data
 ; root under ProgramData and grants the local Users group (SID S-1-5-32-545)
 ; the explicit rights set below, with object+container inheritance, on the
-; whole tree:
+; root alone (no /T, so already-hardened per-SID subtrees are never re-opened
+; on reinstall):
 ;
-;   /grant *S-1-5-32-545:(OI)(CI)(S,DE,RC,RD,WD,AD,REA,WEA,X,DC,RA,WA) /T /C /L
+;   /grant *S-1-5-32-545:(OI)(CI)(S,DE,RC,RD,WD,AD,REA,WEA,X,RA,WA) /C /L
 ;
-; Measured on this machine, that set decodes to access mask 0x1301FF: the
-; Modify set 0x1301BF plus FILE_DELETE_CHILD (0x40), with WRITE_DAC (0x40000),
+; Measured on this machine, that set decodes to access mask 0x1301BF: the
+; Modify set WITHOUT FILE_DELETE_CHILD (0x40), with WRITE_DAC (0x40000),
 ; WRITE_OWNER (0x80000) and GENERIC_ALL (0x10000000) all clear. icacls
-; re-renders the ACE as `(OI)(CI)(M,DC)`, which is the cross-check that the set
-; really is "Modify plus delete-child and nothing else".
+; re-renders the ACE as `(OI)(CI)(M)`, which is the cross-check that the set
+; really is "Modify and nothing else".
 ;
 ; A failed create/grant aborts the install with a bilingual message; `/SD IDOK`
 ; keeps silent installs non-blocking (the message is skipped there and only the
@@ -334,7 +345,7 @@
       ; create failure is caught here instead of from icacls.
       StrCpy $2 "cannot create root"
     ${Else}
-      nsExec::ExecToStack '"$4" "$1" /grant *S-1-5-32-545:(OI)(CI)(S,DE,RC,RD,WD,AD,REA,WEA,X,DC,RA,WA) /T /C /L'
+      nsExec::ExecToStack '"$4" "$1" /grant *S-1-5-32-545:(OI)(CI)(S,DE,RC,RD,WD,AD,REA,WEA,X,RA,WA) /C /L'
       Pop $2 ; nsExec return value: the icacls exit code
       Pop $3 ; captured output (unused)
     ${EndIf}
