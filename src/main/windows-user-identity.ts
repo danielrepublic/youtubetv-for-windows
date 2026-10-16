@@ -34,7 +34,7 @@ export const SID_QUERY_MAX_OUTPUT_BYTES = 64 * 1024;
 // more subauthorities. Accepts any authority, including domain accounts
 // (S-1-5-...) and Azure AD accounts (S-1-12-...). Rejects anything that is not
 // exactly one such token, so a value can never contain a path separator.
-const SID_PATTERN = /^S-1-\d+(?:-\d+)+$/;
+export const SID_PATTERN = /^S-1-\d+(?:-\d+)+$/;
 
 function decodeOutput(raw: unknown): string {
   if (typeof raw === "string") {
