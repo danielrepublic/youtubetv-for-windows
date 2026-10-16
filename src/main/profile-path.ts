@@ -53,6 +53,8 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import type { HardenAclResult } from "./profile-acl.ts";
+import { hardenProfileDirectory } from "./profile-acl.ts";
 import type { SidResult } from "./windows-user-identity.ts";
 import { resolveCurrentUserSidSync } from "./windows-user-identity.ts";
 import type {
@@ -204,6 +206,11 @@ export interface ProfileActivationDeps {
   resolveSid?: () => SidResult;
   fileSystem?: ProfileFileSystem;
   ensureFallback?: (fileSystem: ProfileFileSystem) => FallbackResult;
+  // The per-SID ACL hardening seam (issue #2). Production applies the
+  // protected DACL via hardenProfileDirectory; tests inject a fake to
+  // simulate success or failure without spawning PowerShell. A failure uses
+  // the documented temp fallback, exactly like an unusable directory.
+  hardenAcl?: (directory: string, sid: string) => HardenAclResult;
 }
 
 function activateFallback(
@@ -229,14 +236,16 @@ function activateFallback(
   };
 }
 
-// Activates the persistent layout: obtains the SID, resolves, ensures BOTH
-// directories, then points Electron at them via setSessionDataPath /
+// Activates the persistent layout: obtains the SID, resolves, ensures the
+// per-SID user directory FIRST, hardens its ACL (issue #2), then ensures the
+// profile/userdata children (created after hardening, so they inherit the
+// protected DACL), then points Electron at them via setSessionDataPath /
 // setUserDataPath (production: app.setPath("sessionData", …) and
-// app.setPath("userData", …)). An unavailable identity, or corruption/creation
-// failure of either directory, uses the documented temp fallback and reports
-// usedFallback + bilingual guidance. Only throws when even the fallback cannot
-// be created (disk catastrophe); production still prefers to attempt startup
-// and lets the caller decide.
+// app.setPath("userData", …)). An unavailable identity, a hardening failure,
+// or corruption/creation failure of any directory uses the documented temp
+// fallback and reports usedFallback + bilingual guidance. Only throws when
+// even the fallback cannot be created (disk catastrophe); production still
+// prefers to attempt startup and lets the caller decide.
 export function activateProfileDirectory(
   deps: ProfileActivationDeps,
 ): ProfileActivation {
@@ -250,6 +259,17 @@ export function activateProfileDirectory(
     );
   }
   const layout = resolveProfileLayout(deps.layout, sid.sid);
+  const userEnsured = ensureProfileDirectory(layout.userDirectory, fileSystem);
+  if (!userEnsured.ok) {
+    return activateFallback(deps, fileSystem, layout.userDirectory);
+  }
+  const hardened = (deps.hardenAcl ?? hardenProfileDirectory)(
+    layout.userDirectory,
+    sid.sid,
+  );
+  if (!hardened.ok) {
+    return activateFallback(deps, fileSystem, layout.userDirectory);
+  }
   const profileEnsured = ensureProfileDirectory(
     layout.profileDirectory,
     fileSystem,
@@ -287,12 +307,14 @@ export function activateProfileDirectory(
 // Production adapter over the Electron app object. Reads PROGRAMDATA and
 // USERPROFILE from the environment (the documented convention) with the home
 // directory and OS user name as USERPROFILE fallbacks and app.getPath("appData")
-// as the blank-PROGRAMDATA fallback, obtains the account SID, then redirects
-// BOTH Electron data paths before any session is opened. These are the ONLY
-// sanctioned environment-variable reads in src/ (the SID query reads SystemRoot
-// in windows-user-identity.ts, for the system directory only): they select a
-// per-account data directory, never a runtime override, and the no-override
-// suite allowlists exactly these variable names in this file (see
+// as the blank-PROGRAMDATA fallback, obtains the account SID, hardens the
+// per-SID directory ACL (profile-acl.ts), then redirects BOTH Electron data
+// paths before any session is opened. These are the ONLY sanctioned
+// environment-variable reads in src/ (the SID query reads SystemRoot in
+// windows-user-identity.ts and the ACL hardening reads it in profile-acl.ts,
+// both for the system directory only): they select a per-account data
+// directory, never a runtime override, and the no-override suite allowlists
+// exactly these variable names in those files (see
 // test/electron/secure-host.test.mjs).
 export interface ElectronProfileApp {
   getPath(name: string): string;

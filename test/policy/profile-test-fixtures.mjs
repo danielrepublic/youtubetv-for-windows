@@ -60,6 +60,7 @@ export function activateWith(overrides = {}) {
     layout: LAYOUT_BASE,
     legacy: LEGACY_BASE,
     resolveSid: () => ({ ok: true, sid: SID_ADA }),
+    hardenAcl: () => ({ ok: true }),
     setSessionDataPath: (directory) => sessionPaths.push(directory),
     setUserDataPath: (directory) => userDataPaths.push(directory),
     fileSystem,
