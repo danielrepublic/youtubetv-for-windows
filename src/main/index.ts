@@ -2,7 +2,7 @@ import { app, BrowserWindow, dialog, session, shell } from "electron";
 import { YOUTUBE_TV_URL, startHost } from "./app.ts";
 import { createProfileDiagnostics } from "./diagnostics.ts";
 import type { DiagnosticsSink } from "./diagnostics.ts";
-import { profileFallbackDialog } from "./dialogs.ts";
+import { profileFallbackDialog, sidMigrationDialog } from "./dialogs.ts";
 import type { DialogPresenter } from "./dialogs.ts";
 import { activateProductionProfile } from "./profile-path.ts";
 import { IDENTITY_PARTITION } from "./session.ts";
@@ -49,6 +49,19 @@ async function bootstrap(): Promise<void> {
       message: `${profile.guidance.zhTW}\n${profile.guidance.en}`,
       detail: fallbackNotice.message,
       buttons: [...fallbackNotice.buttons],
+    });
+  } else if (profile.migration !== null) {
+    // Fresh SID-scoped directory started; legacy username-derived data is left
+    // untouched. The temporary-fallback dialog above wins when both could
+    // apply, because the fallback activation never reaches this branch.
+    const migrationNotice = sidMigrationDialog(
+      profile.migration.legacyDirectory,
+      profile.migration.freshDirectory,
+    );
+    await dialog.showMessageBox({
+      title: migrationNotice.title,
+      message: migrationNotice.message,
+      buttons: [...migrationNotice.buttons],
     });
   }
 
