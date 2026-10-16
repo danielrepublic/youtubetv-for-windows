@@ -131,6 +131,7 @@ test("environment reads only select data roots, legacy locations, and system Pow
     "main",
     "windows-user-identity.ts",
   );
+  const aclFile = path.join(srcDirectory, "main", "profile-acl.ts");
   const violations = [];
   for (const file of listSourceFiles()) {
     const relative = path.relative(repositoryRoot, file);
@@ -143,7 +144,8 @@ test("environment reads only select data roots, legacy locations, and system Pow
       const isSanctionedRead =
         (isProfilePath &&
           /process\.env\.(?:PROGRAMDATA|USERPROFILE)\b/.test(line)) ||
-        (file === identityFile && /process\.env\.SystemRoot\b/.test(line));
+        ((file === identityFile || file === aclFile) &&
+          /process\.env\.SystemRoot\b/.test(line));
       if (!isSanctionedRead) {
         violations.push(`${relative}:${index + 1}: ${line.trim()}`);
       }
