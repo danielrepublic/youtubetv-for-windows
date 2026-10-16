@@ -74,6 +74,27 @@ export function profileFallbackDialog(
   };
 }
 
+// Fresh-identity migration notice (issue #1). Legacy tree is left untouched;
+// the sign-in instruction stays conditional because this notice can reappear.
+export function sidMigrationDialog(
+  legacyDirectory: string,
+  freshDirectory: string,
+): { title: string; message: string; buttons: [string] } {
+  return {
+    title: "設定檔改用以 Windows 身分識別 / Profile now uses Windows identity",
+    message:
+      `偵測到舊的設定檔資料（${legacyDirectory}），它會留在原處，不會被搬移、複製或合併，` +
+      `舊的登入狀態也不會自動轉移。\n` +
+      `目前使用的是這個 SID 設定檔目錄（${freshDirectory}）；若你還沒登入，請重新登入。\n` +
+      `Legacy profile data was found (${legacyDirectory}) and is left in place; ` +
+      `it is never moved, copied, or merged, and the old login is not ` +
+      `transferred automatically. The app uses this SID-scoped profile ` +
+      `directory (${freshDirectory}); if you are not yet signed in, please ` +
+      `sign in again.`,
+    buttons: ["確定 (OK)"],
+  };
+}
+
 export interface MessageBoxOptions {
   title?: string;
   message: string;
