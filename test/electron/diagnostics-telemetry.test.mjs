@@ -58,6 +58,7 @@ let baseCounter = 0;
 // The per-Windows-user key is pinned through the fixture host so the sentinel
 // directory and the profile directory land on a deterministic path under base.
 const PROBE_USER_KEY = "probe-user";
+const PROBE_SID = "S-1-5-21-1000-2000-3000-1001";
 
 function freshBase(t) {
   baseCounter += 1;
@@ -76,7 +77,8 @@ function diagnosticsDirectoryFor(base) {
     base,
     "youtubetv-for-windows",
     "users",
-    PROBE_USER_KEY,
+    "by-sid",
+    PROBE_SID,
     "diagnostics",
   );
 }
@@ -129,6 +131,7 @@ function diagnosticsArgs({ pageUrl, base, authOrigin, popupUrl, failUrl }) {
     `--popup-url=${popupUrl}`,
     "--dialog-script=2",
     `--user-key=${PROBE_USER_KEY}`,
+    `--sid=${PROBE_SID}`,
     ...(failUrl === undefined ? [] : [`--fail-url=${failUrl}`]),
   ];
 }
@@ -259,7 +262,13 @@ test("diagnostics OFF creates no telemetry file or directory", async (t) => {
   // The profile itself was still activated: the app ran normally.
   assert.ok(
     mode.profileDirectory.endsWith(
-      path.join("youtubetv-for-windows", "users", PROBE_USER_KEY, "profile"),
+      path.join(
+        "youtubetv-for-windows",
+        "users",
+        "by-sid",
+        PROBE_SID,
+        "profile",
+      ),
     ),
   );
 });

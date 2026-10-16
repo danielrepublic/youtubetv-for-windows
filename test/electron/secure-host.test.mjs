@@ -27,6 +27,7 @@ const {
   PROFILE_SUBDIRECTORY_NAME,
   SESSION_DATA_PATH_NAME,
   USERS_DIRECTORY_NAME,
+  SID_USERS_SEGMENT,
   USER_DATA_PATH_NAME,
   USER_DATA_SUBDIRECTORY_NAME,
 } = await import("../../src/main/profile-path.ts");
@@ -123,8 +124,13 @@ test("host file reads cannot steer identity", () => {
   assert.deepEqual(hostViolations, []);
 });
 
-test("the only environment reads are the profile-path PROGRAMDATA and USERPROFILE convention", () => {
+test("environment reads only select data roots, legacy locations, and system PowerShell", () => {
   const profilePathFile = path.join(srcDirectory, "main", "profile-path.ts");
+  const identityFile = path.join(
+    srcDirectory,
+    "main",
+    "windows-user-identity.ts",
+  );
   const violations = [];
   for (const file of listSourceFiles()) {
     const relative = path.relative(repositoryRoot, file);
@@ -135,8 +141,9 @@ test("the only environment reads are the profile-path PROGRAMDATA and USERPROFIL
       }
       const isProfilePath = file === profilePathFile;
       const isSanctionedRead =
-        isProfilePath &&
-        /process\.env\.(?:PROGRAMDATA|USERPROFILE)\b/.test(line);
+        (isProfilePath &&
+          /process\.env\.(?:PROGRAMDATA|USERPROFILE)\b/.test(line)) ||
+        (file === identityFile && /process\.env\.SystemRoot\b/.test(line));
       if (!isSanctionedRead) {
         violations.push(`${relative}:${index + 1}: ${line.trim()}`);
       }
@@ -149,7 +156,7 @@ test("the only environment reads are the profile-path PROGRAMDATA and USERPROFIL
   const convention = fs.readFileSync(profilePathFile, "utf8");
   assert.match(
     convention,
-    /%PROGRAMDATA%\\youtubetv-for-windows\\users\\<key>\\profile/,
+    /%PROGRAMDATA%\\youtubetv-for-windows\\users\\by-sid\\<SID>\\profile/,
   );
   assert.match(convention, /NO version/);
   assert.match(convention, /app\.setPath\("sessionData"/);
@@ -320,11 +327,28 @@ test("the entry redirects both data paths before ready, the first session, and t
   // the roaming default is never a write target for this test.
   process.env.PROGRAMDATA = path.join(base, "ProgramData");
   process.env.USERPROFILE = path.join(base, "Users", "probe-user");
+  const legacyDirectory = path.join(
+    process.env.PROGRAMDATA,
+    PROFILE_DIRECTORY_NAME,
+    USERS_DIRECTORY_NAME,
+    "probe-user",
+  );
+  fs.mkdirSync(path.join(legacyDirectory, PROFILE_SUBDIRECTORY_NAME), {
+    recursive: true,
+  });
+  const { resolveCurrentUserSidSync } =
+    await import("../../src/main/windows-user-identity.ts");
+  const identity = resolveCurrentUserSidSync();
+  assert.equal(identity.ok, true, "the Windows process SID query must succeed");
   let releaseReady;
   const readyPromise = new Promise((resolve) => {
     releaseReady = resolve;
   });
-  const recorder = { events: [], readyPromise };
+  let releaseNotice;
+  const noticePromise = new Promise((resolve) => {
+    releaseNotice = resolve;
+  });
+  const recorder = { events: [], dialogs: [], readyPromise, noticePromise };
   globalThis.__ytvwStartupOrder = recorder;
   t.after(() => {
     delete globalThis.__ytvwStartupOrder;
@@ -377,6 +401,14 @@ test("the entry redirects both data paths before ready, the first session, and t
   );
 
   releaseReady();
+  assert.ok(await waitForEvent(recorder, "dialog.showMessageBox"), trace());
+  assert.equal(
+    recorder.events.includes(`session.fromPartition:${IDENTITY_PARTITION}`),
+    false,
+  );
+  assert.equal(recorder.events.includes("window-created"), false);
+  assert.ok(recorder.dialogs[0].message.includes(legacyDirectory));
+  releaseNotice();
   assert.ok(
     await waitForEvent(recorder, "window-created"),
     `the entry must reach the first window after ready; observed: ${trace()}`,
@@ -387,6 +419,7 @@ test("the entry redirects both data paths before ready, the first session, and t
     ["setPath:sessionData", "redirect the session profile"],
     ["setPath:userData", "redirect the user-data directory"],
     ["ready-resolved", "the app becoming ready"],
+    ["dialog.showMessageBox", "show the legacy-data notice"],
     [`session.fromPartition:${IDENTITY_PARTITION}`, "the first session access"],
     ["window-created", "the first window"],
   ].map(([event, description]) => [event, description, at(event)]);
@@ -415,7 +448,8 @@ test("the entry redirects both data paths before ready, the first session, and t
     process.env.PROGRAMDATA,
     PROFILE_DIRECTORY_NAME,
     USERS_DIRECTORY_NAME,
-    "probe-user",
+    SID_USERS_SEGMENT,
+    identity.sid,
   );
   assert.equal(
     fake.__paths.sessionData,
