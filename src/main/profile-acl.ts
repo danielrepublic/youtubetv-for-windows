@@ -79,6 +79,7 @@ export const HARDEN_ACL_TIMEOUT_MS = 5000;
 export const PROFILE_ACL_MARKER_NAME = ".acl-hardened";
 export const PROFILE_ACL_MARKER_CONTENT = "1";
 export const USERS_SID = "S-1-5-32-545";
+export const ADMINISTRATORS_SID = "S-1-5-32-544";
 
 const defaultRunner: HardenAclRunner = (file, args, options) =>
   execFileSync(file, [...args], {
@@ -134,15 +135,16 @@ export function hardenProfileDirectory(
   );
   const icacls = path.join(systemRoot, "System32", "icacls.exe");
 
-  // Refuse a reparse point, and refuse a directory the app's own account does
-  // not own, before touching any ACL.
+  // Guard: refuse a reparse point, and refuse a directory owned by a
+  // DIFFERENT account. An elevated process owns its directories as
+  // Administrators, so that owner is accepted too (production is asInvoker).
   const guard = [
     "$ErrorActionPreference='Stop'",
     `$p=${toPowerShellSingleQuoted(directory)}`,
     "$di=New-Object System.IO.DirectoryInfo -ArgumentList $p",
     "if(([int]$di.Attributes -band 0x400) -ne 0){exit 2}",
     "$own=$di.GetAccessControl([System.Security.AccessControl.AccessControlSections]::Owner).GetOwner([System.Security.Principal.SecurityIdentifier]).Value",
-    `if($own -ne ${toPowerShellSingleQuoted(sid)}){exit 3}`,
+    `if($own -ne ${toPowerShellSingleQuoted(sid)} -and $own -ne '${ADMINISTRATORS_SID}'){exit 3}`,
     "exit 0",
   ].join(";");
   try {

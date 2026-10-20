@@ -106,6 +106,10 @@ test("the guard carries the reparse and owner checks, with no shell", () => {
   assert.match(script, /exit 2/);
   assert.match(script, /exit 3/);
   assert.doesNotMatch(script, /Get-Acl|Set-Acl|SetAccessControl/);
+  assert.ok(
+    script.includes("S-1-5-32-544"),
+    "the owner guard must also accept an Administrators-owned directory",
+  );
   assert.equal(call.options.windowsHide, true);
   assert.equal(call.options.timeout, HARDEN_ACL_TIMEOUT_MS);
 });
