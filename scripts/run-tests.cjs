@@ -6,9 +6,13 @@
 //   * Suite files are discovered by walking `test/**/*.test.mjs`; no shell
 //     glob is involved (a Node 24 glob that matches nothing exits 0 with
 //     "tests 0", which would silently green-light an empty suite).
-//   * Every suite file belongs to the `unit` chain EXCEPT files under
-//     `test/electron/`, which belong to the `electron` chain. A new test area
-//     is therefore picked up with no edit to any script.
+//   * Every suite file belongs to exactly one of three chains: `packaging`
+//     for files under `test/packaging/` (they need makensis, Windows
+//     PowerShell and icacls), `electron` for files under `test/electron/`
+//     (they need a desktop Electron runtime), and `logic` for everything else.
+//     The split is exhaustive and mutually exclusive, so a new test area is
+//     picked up with no edit to any script, and a packaging/Electron problem
+//     never hides a pure-logic regression.
 //   * Three zero-test guards: no suite files at all, a selected chain that
 //     matches no file, and (after the run) a TAP summary with `# tests N`
 //     where N > 0 plus no enumerated file reported as a bare vacuous
@@ -25,7 +29,8 @@ const path = require("node:path");
 const REPOSITORY_ROOT = path.resolve(__dirname, "..");
 const TEST_DIRECTORY = path.join(REPOSITORY_ROOT, "test");
 const ELECTRON_CHAIN_SEGMENT = "electron";
-const CHAINS = ["unit", "electron"];
+const PACKAGING_CHAIN_SEGMENT = "packaging";
+const CHAINS = ["logic", PACKAGING_CHAIN_SEGMENT, ELECTRON_CHAIN_SEGMENT];
 
 function toPosix(relativePath) {
   return relativePath.split(path.sep).join("/");
@@ -70,9 +75,17 @@ function discoverSuiteFiles() {
 
 function selectChain(files, chain) {
   return files.filter((file) => {
-    const segments = path.relative(TEST_DIRECTORY, file).split(path.sep);
-    const isElectron = segments[0].toLowerCase() === ELECTRON_CHAIN_SEGMENT;
-    return chain === "electron" ? isElectron : !isElectron;
+    const area = path
+      .relative(TEST_DIRECTORY, file)
+      .split(path.sep)[0]
+      .toLowerCase();
+    if (chain === ELECTRON_CHAIN_SEGMENT) {
+      return area === ELECTRON_CHAIN_SEGMENT;
+    }
+    if (chain === PACKAGING_CHAIN_SEGMENT) {
+      return area === PACKAGING_CHAIN_SEGMENT;
+    }
+    return area !== ELECTRON_CHAIN_SEGMENT && area !== PACKAGING_CHAIN_SEGMENT;
   });
 }
 
@@ -270,6 +283,11 @@ async function main() {
       `[run-tests] FAIL the ${parsed.chain} chain matched no suite file; discovered files:\n${describe(suiteFiles)}\n`,
     );
     return 1;
+  }
+  if (parsed.chain === PACKAGING_CHAIN_SEGMENT) {
+    process.stdout.write(
+      "[run-tests] packaging chain prerequisites: makensis, Windows PowerShell and icacls; a suite that cannot find its tool skips itself, and an all-skipped chain still trips the zero-test guard\n",
+    );
   }
   return runChain(parsed.chain, selectedFiles, parsed.runnerTimeoutMs);
 }
