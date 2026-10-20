@@ -494,6 +494,9 @@ function profileActivationInputs(programDataBase) {
     },
     legacy: { userProfile: "", homeDir: "", userName: userKey },
     resolveSid: () => resolveCurrentUserSidSync(() => sid),
+    // The fixture drives a SYNTHETIC SID that maps to no real account, so the
+    // real icacls grant cannot apply; ACL hardening has its own suite.
+    hardenAcl: () => ({ ok: true }),
   };
 }
 
