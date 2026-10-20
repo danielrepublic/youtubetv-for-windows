@@ -102,6 +102,8 @@ export interface ProfileFileSystem {
   mkdirSync(candidate: string, options?: { recursive?: boolean }): unknown;
   statSync(candidate: string): { isDirectory(): boolean };
   mkdtempSync(prefix: string): string;
+  writeFileSync(candidate: string, data: string): unknown;
+  unlinkSync(candidate: string): unknown;
 }
 
 const nodeFileSystem: ProfileFileSystem = {
@@ -109,10 +111,18 @@ const nodeFileSystem: ProfileFileSystem = {
   mkdirSync: (candidate, options) => fs.mkdirSync(candidate, options),
   statSync: (candidate) => fs.statSync(candidate),
   mkdtempSync: (prefix) => fs.mkdtempSync(prefix),
+  writeFileSync: (candidate, data) => fs.writeFileSync(candidate, data),
+  unlinkSync: (candidate) => fs.unlinkSync(candidate),
 };
 
-// Ensures the directory exists and is a directory. Returns a reason string
-// instead of throwing so the caller can choose the documented fallback.
+export const WRITE_PROBE_PREFIX = ".ytvw-write-probe-";
+
+let writeProbeSequence = 0;
+
+// Ensures the directory exists, is a directory, and is actually writable. A
+// directory that exists but rejects writes must fail closed here, or the
+// failure surfaces later inside Chromium instead of the documented temp
+// fallback. The probe is one uniquely named throwaway file.
 export function ensureProfileDirectory(
   directory: string,
   fileSystem: ProfileFileSystem = nodeFileSystem,
@@ -139,6 +149,24 @@ export function ensureProfileDirectory(
       ok: false,
       reason: "profile path exists but is not a directory",
     };
+  }
+  writeProbeSequence += 1;
+  const probe = path.join(
+    directory,
+    `${WRITE_PROBE_PREFIX}${process.pid}-${writeProbeSequence}`,
+  );
+  try {
+    fileSystem.writeFileSync(probe, "");
+  } catch (error) {
+    return {
+      ok: false,
+      reason: `profile directory is not writable: ${String(error)}`,
+    };
+  }
+  try {
+    fileSystem.unlinkSync(probe);
+  } catch {
+    // Best-effort cleanup of the throwaway probe; writability is proven.
   }
   return { ok: true };
 }
