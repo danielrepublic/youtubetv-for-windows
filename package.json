@@ -1,6 +1,6 @@
 {
   "name": "youtubetv-for-windows",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "private": true,
   "description": "Unofficial, x64-only Windows host for the YouTube TV web interface (Electron + TypeScript).",
   "license": "UNLICENSED",
