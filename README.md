@@ -19,7 +19,7 @@ Watch YouTube TV (`https://www.youtube.com/tv`) in a fullscreen Windows app.
 
 - 這個程式不是官方產品。它和 YouTube 或 Google 沒有任何關係，也沒有得到它們的認可或支援。
 - 這個程式沒有服務保證（no SLA）。YouTube 隨時可能改變或封鎖這類存取，到時程式可能部分或完全不能用。
-- 這個程式用一組固定的電視裝置識別（PS4 Leanback with Cobalt 使用者代理字串）來請求電視版頁面。這是一種裝置偽裝（device spoofing），存在風險：YouTube 可能隨時不再接受它。這裡是把它當成風險告訴你，而不是功能保證。
+- 這個程式用一組固定的電視裝置識別（PS4 Leanback Shell，以 Gecko/Firefox 作為識別名稱的使用者代理字串，並非本機實際引擎）來請求電視版頁面。這是一種裝置偽裝（device spoofing），存在風險：YouTube 可能隨時不再接受它。這裡是把它當成風險告訴你，而不是功能保證。
 - 說白了：This app is not official. There is no guarantee that sign-in, phone pairing, or 4K will keep working. 資料一旦刪掉就回不來（There is no rollback for your data），重新安裝也不會找回來。
 
 ### 系統需求
@@ -43,7 +43,7 @@ https://github.com/danielrepublic/youtubetv-for-windows/releases/latest
 youtubetv-for-windows-<版本>-x64.exe
 ```
 
-例如 `youtubetv-for-windows-0.2.0-x64.exe`。這是唯一要執行的檔案，其他東西都不用理會。不要從其他網站、網盤或別人傳給你的檔案安裝。
+例如 `youtubetv-for-windows-0.3.0-x64.exe`。這是唯一要執行的檔案，其他東西都不用理會。不要從其他網站、網盤或別人傳給你的檔案安裝。
 
 ### 安裝
 
@@ -185,7 +185,7 @@ Please read the disclosure below before you install.
 
 - This app is not official. It is not affiliated with, endorsed by, or supported by YouTube or Google.
 - There is no SLA. YouTube can change or block this kind of access at any time, and the app may then partly or fully stop working.
-- The app requests the TV page with a fixed TV device identity (a PS4 Leanback with Cobalt user-agent string). That's device spoofing, and it's a risk, not a feature: YouTube may stop accepting it whenever it wants.
+- The app requests the TV page with a fixed TV device identity (a PS4 Leanback Shell user-agent string naming Gecko/Firefox as an identity label only, not the local engine). That's device spoofing, and it's a risk, not a feature: YouTube may stop accepting it whenever it wants.
 - In plain words: This app is not official. There is no guarantee that sign-in, phone pairing, or 4K will keep working. There is also no rollback for your data: once it is deleted, reinstalling does not bring it back.
 
 ### Requirements
@@ -209,7 +209,7 @@ On that page, only trust the asset named like this:
 youtubetv-for-windows-<version>-x64.exe
 ```
 
-For example `youtubetv-for-windows-0.2.0-x64.exe`. That is the only file to run; nothing else there needs your attention. Don't install files from other sites, drives, or copies someone sent you.
+For example `youtubetv-for-windows-0.3.0-x64.exe`. That is the only file to run; nothing else there needs your attention. Don't install files from other sites, drives, or copies someone sent you.
 
 ### Install
 

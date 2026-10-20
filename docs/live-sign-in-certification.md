@@ -5,6 +5,11 @@ Scope: the leading `passed` status covers the SID-keyed layout
 build (see the status history below). The earlier 2026-10-01 attestation,
 recorded with v0.1.0 installed before the layout change, is retained in the
 history and is superseded for the current layout by the 2026-10-17 entry.
+v0.3.0 restores the historical PS4 Gecko identity
+`Mozilla/5.0 (PS4; Leanback Shell) Gecko/20100101 Firefox/65.0 LeanbackShell/01.00.01.75 Sony PS4/ (PS4, , no, CH)`
+(Gecko/Firefox as an identity label only) in source/test; live sign-in, phone
+pairing, and 4K on that restored identity remain unverified and no new manual
+success is claimed here.
 
 # Live sign-in certification (release gate)
 
@@ -263,6 +268,16 @@ Google account (2FA phone available), and a build of this repository.
   the SID layout is now re-verified. No logs or screenshots were provided;
   visual attestation is accepted as before. Phone pairing remains a separate,
   uncertified gate.
+- 2026-10-21 — v0.3.0 identity-restore preparation/change note (no new `passed`): the
+  production identity is the historical PS4 Gecko string
+  `Mozilla/5.0 (PS4; Leanback Shell) Gecko/20100101 Firefox/65.0 LeanbackShell/01.00.01.75 Sony PS4/ (PS4, , no, CH)`.
+  Live sign-in, phone pairing, and 4K on this restored Gecko identity remain
+  unverified; no new Gecko manual success is claimed. Historical Cobalt-build
+  observation only: the user reported phone pairing passed on the prior Cobalt
+  build, and a 4K video showed max 2K
+  (full 4K preconditions were not verified). The leading `passed` above still
+  covers only the 2026-10-17 SID-layout sign-in attestation on the historical
+  v0.2.0 build.
 
 ## Phone pairing follow-up (separate release gate)
 
