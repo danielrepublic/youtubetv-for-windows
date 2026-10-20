@@ -148,14 +148,23 @@ test("the toolchain gate is wired into both install paths", () => {
   assert.match(npmrc, /^engine-strict=true$/m);
 });
 
-test("the headless chain and the desktop chain are separate contracts", () => {
+test("the logic, packaging, and electron chains are separate contracts", () => {
   assert.equal(
-    manifest.scripts["test:unit"],
-    "node scripts/run-tests.cjs unit",
+    manifest.scripts["test:logic"],
+    "node scripts/run-tests.cjs logic",
+  );
+  assert.equal(
+    manifest.scripts["test:packaging"],
+    "node scripts/run-tests.cjs packaging",
   );
   assert.equal(
     manifest.scripts["test:electron"],
     "node scripts/run-tests.cjs electron",
+  );
+  assert.equal(
+    manifest.scripts["test:unit"],
+    "npm run test:logic && npm run test:packaging",
+    "the headless umbrella must run the logic and packaging chains",
   );
   assert.equal(
     manifest.scripts["verify:static"],
@@ -173,6 +182,8 @@ test("the headless chain and the desktop chain are separate contracts", () => {
 
 test("the test runner never relies on a shell glob", () => {
   for (const scriptName of [
+    "test:logic",
+    "test:packaging",
     "test:unit",
     "test:electron",
     "verify:static",
