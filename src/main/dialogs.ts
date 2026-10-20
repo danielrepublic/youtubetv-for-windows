@@ -27,7 +27,7 @@ export interface RouteFailureDialogContent {
   title: string;
   message: string;
   detail: string;
-  buttons: [string, string, string];
+  buttons: string[];
 }
 
 const RETRY_BUTTON = "重試 (Retry)";
@@ -35,6 +35,11 @@ const OPEN_BROWSER_BUTTON = "在瀏覽器中開啟 (Open in browser)";
 const SUPPORT_BUTTON = "支援 (Support)";
 
 const ROUTE_FAILURE_TITLE = "YouTube TV 無法載入 / YouTube TV failed to load";
+
+const RETRY_EXHAUSTED_LINE = {
+  zhTW: "已達重試次數上限，請改用下列選項。",
+  en: "Retries are exhausted; use one of the options below.",
+};
 
 const ROUTE_FAILURE_MESSAGES: Record<RouteFailureKind, BilingualText> = {
   "redirected-away": {
@@ -47,15 +52,23 @@ const ROUTE_FAILURE_MESSAGES: Record<RouteFailureKind, BilingualText> = {
   },
 };
 
+// While a retry is available the dialog offers Retry plus the two next steps;
+// once the budget is spent Retry is omitted, so no button ever does nothing.
 export function routeFailureDialog(
   kind: RouteFailureKind,
+  exhausted = false,
 ): RouteFailureDialogContent {
   const body = ROUTE_FAILURE_MESSAGES[kind];
+  const lines = exhausted
+    ? [body.zhTW, RETRY_EXHAUSTED_LINE.zhTW, body.en, RETRY_EXHAUSTED_LINE.en]
+    : [body.zhTW, body.en];
   return {
     title: ROUTE_FAILURE_TITLE,
-    message: `${body.zhTW}\n${body.en}`,
+    message: lines.join("\n"),
     detail: `${SUPPORT_RELEASE_URL}`,
-    buttons: [RETRY_BUTTON, OPEN_BROWSER_BUTTON, SUPPORT_BUTTON],
+    buttons: exhausted
+      ? [OPEN_BROWSER_BUTTON, SUPPORT_BUTTON]
+      : [RETRY_BUTTON, OPEN_BROWSER_BUTTON, SUPPORT_BUTTON],
   };
 }
 
@@ -113,26 +126,31 @@ export interface DialogPresenter {
 export interface RouteFailurePrompt {
   kind: RouteFailureKind;
   failedUrl: string;
-  attempt: number;
+  exhausted: boolean;
 }
 
-// Shows the route-failure dialog with exactly three bilingual actions and
-// maps the clicked button to the recovery action. Any out-of-range response
-// (dismissed dialog, unexpected index) maps to "support" so the user always
-// lands on a documented next step instead of a dead end.
+// Shows the route-failure dialog and maps the clicked button to a recovery
+// action. While retries remain it carries three bilingual actions; once they
+// are exhausted it drops Retry and carries the two meaningful next steps.
+// Any out-of-range response (dismissed dialog, unexpected index) maps to
+// "support" so the user always lands on a documented next step, never a dead
+// end.
 export async function showRouteFailureDialog(
   presenter: DialogPresenter,
   prompt: RouteFailurePrompt,
 ): Promise<RouteFailureAction> {
-  const content = routeFailureDialog(prompt.kind);
+  const content = routeFailureDialog(prompt.kind, prompt.exhausted);
   const result = await presenter.showMessageBox({
     title: content.title,
     message: `${content.message}\n\n${prompt.failedUrl}`,
     detail: content.detail,
     buttons: [...content.buttons],
     defaultId: 0,
-    cancelId: 2,
+    cancelId: content.buttons.length - 1,
   });
+  if (prompt.exhausted) {
+    return result.response === 0 ? "open-browser" : "support";
+  }
   if (result.response === 0) {
     return "retry";
   }

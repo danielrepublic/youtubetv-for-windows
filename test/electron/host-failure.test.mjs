@@ -55,12 +55,12 @@ test("redirected-away offers retry, browser, and support, then opens the browser
   );
 });
 
-test("retries are bounded: exhaustion stops the loop without looping forever", async (t) => {
+test("retries are bounded: the exhausted dialog drops Retry and opens the browser", async (t) => {
   const fixture = await startFixtureServer(t);
   const offRoute = `${fixture.url}plain`;
-  // Script [0,0,0]: always retry against the local off-route target. One
-  // initial dialog plus exactly two reloads (MAX_ROUTE_RETRIES), then
-  // retries-exhausted with no fourth dialog and no external call.
+  // Script [0,0,0]: click the first button each time. The first two dialogs
+  // carry Retry (two reloads, MAX_ROUTE_RETRIES); the third drops Retry, so
+  // the same click opens the browser instead of looping on a dead retry.
   const run = await spawnFixtureHost([
     "--scenario=route",
     `--page-url=${offRoute}`,
@@ -69,9 +69,19 @@ test("retries are bounded: exhaustion stops the loop without looping forever", a
   ]);
   assertCleanRun(run);
   const result = recordOf(run.records, "route-result");
-  assertThreeBilingualActions(result.dialogOptions);
   assert.equal(result.dialogOptions.length, 3);
-  assert.deepEqual(result.externalCalls, []);
+  for (const options of result.dialogOptions.slice(0, 2)) {
+    assert.deepEqual(options.buttons, [
+      "重試 (Retry)",
+      "在瀏覽器中開啟 (Open in browser)",
+      "支援 (Support)",
+    ]);
+  }
+  assert.deepEqual(result.dialogOptions[2].buttons, [
+    "在瀏覽器中開啟 (Open in browser)",
+    "支援 (Support)",
+  ]);
+  assert.deepEqual(result.externalCalls, [offRoute]);
   const finishedLoads = result.navigationEvents.filter(
     (entry) => entry === "did-finish-load",
   );

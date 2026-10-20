@@ -31,8 +31,8 @@ export type TvRouteOutcome = "ok" | RouteFailureKind;
 export type MainNavigationDecision = "allow" | "open-external" | "deny";
 
 // Bounded recovery attempts after the failure dialog. Retry decrements the
-// budget; reaching zero stops the loop (retries-exhausted) instead of
-// re-showing the dialog forever.
+// budget; once it is spent the next dialog offers no Retry, only the
+// meaningful next steps (open in browser / support).
 export const MAX_ROUTE_RETRIES = 2;
 
 export const YOUTUBE_HOST = "youtube.com";
@@ -134,18 +134,17 @@ export interface RouteRecoveryDeps {
   reload: () => Promise<string>;
 }
 
-export type RouteRecoveryOutcome =
-  "recovered" | "dismissed-external" | "retries-exhausted";
+export type RouteRecoveryOutcome = "recovered" | "dismissed-external";
 
 function safeBrowserUrl(failedUrl: string, targetUrl: string): string {
   return parseHttpsUrl(failedUrl) === null ? targetUrl : failedUrl;
 }
 
-// Bounded bilingual recovery loop: shows the three-action failure dialog,
-// retries the target and re-classifies, delegates validated https: URLs to
-// the OS browser, and opens the support release page. Never loops forever:
-// each retry consumes one attempt and exhaustion returns
-// retries-exhausted without showing the dialog again.
+// Bounded bilingual recovery loop: shows the failure dialog, retries the
+// target and re-classifies while retries remain, and delegates validated
+// https: URLs to the OS browser or opens the support release page. The dialog
+// stops offering Retry once the budget is spent, so every button always leads
+// somewhere and the loop can never spin on a dead retry.
 export async function recoverTvRoute(
   deps: RouteRecoveryDeps,
 ): Promise<RouteRecoveryOutcome> {
@@ -156,7 +155,7 @@ export async function recoverTvRoute(
   for (;;) {
     const action: RouteFailureAction = await showRouteFailureDialog(
       deps.presenter,
-      { kind, failedUrl, attempt },
+      { kind, failedUrl, exhausted: attempt >= budget },
     );
     if (action === "open-browser") {
       await deps.opener.openExternal(safeBrowserUrl(failedUrl, deps.targetUrl));
@@ -165,9 +164,6 @@ export async function recoverTvRoute(
     if (action === "support") {
       await deps.opener.openExternal(SUPPORT_RELEASE_URL);
       return "dismissed-external";
-    }
-    if (attempt >= budget) {
-      return "retries-exhausted";
     }
     attempt += 1;
     let reloaded: string | null;

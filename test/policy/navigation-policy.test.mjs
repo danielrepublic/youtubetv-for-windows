@@ -138,7 +138,7 @@ test("the failure dialog carries exactly three bilingual actions", async () => {
   const action = await showRouteFailureDialog(stub.presenter, {
     kind: "redirected-away",
     failedUrl: "https://www.youtube.com/",
-    attempt: 0,
+    exhausted: false,
   });
   assert.equal(action, "retry");
   assert.equal(stub.seen.length, 1);
@@ -161,7 +161,7 @@ test("out-of-range dialog responses land on support", async () => {
     const action = await showRouteFailureDialog(stub.presenter, {
       kind: "load-failed",
       failedUrl: "https://www.youtube.com/tv",
-      attempt: 0,
+      exhausted: false,
     });
     assert.equal(action, "support");
   }
@@ -235,10 +235,27 @@ test("recoverTvRoute opens the support release page", async () => {
   ]);
 });
 
-test("recoverTvRoute never loops: bounded retries then exhaustion", async () => {
+test("the exhausted dialog drops Retry and keeps only the next steps", async () => {
+  const { routeFailureDialog } = await import("../../src/main/dialogs.ts");
+  assert.deepEqual(routeFailureDialog("load-failed", false).buttons, [
+    "重試 (Retry)",
+    "在瀏覽器中開啟 (Open in browser)",
+    "支援 (Support)",
+  ]);
+  const exhausted = routeFailureDialog("load-failed", true);
+  assert.deepEqual(exhausted.buttons, [
+    "在瀏覽器中開啟 (Open in browser)",
+    "支援 (Support)",
+  ]);
+  assert.match(exhausted.message, /已達重試次數上限/);
+  assert.match(exhausted.message, /Retries are exhausted/);
+});
+
+test("bounded retries: once exhausted the dialog offers no retry and opens the browser", async () => {
   assert.ok(MAX_ROUTE_RETRIES >= 1, "the retry budget must allow a retry");
   const external = [];
-  // Always retry: one initial attempt plus exactly MAX_ROUTE_RETRIES reloads.
+  // Always click the first button: Retry while it is offered, then Open in
+  // browser once the budget is spent and the dialog carries two buttons.
   const stub = stubPresenter([0, 0, 0, 0, 0, 0]);
   let reloads = 0;
   const outcome = await recoverTvRoute({
@@ -256,10 +273,14 @@ test("recoverTvRoute never loops: bounded retries then exhaustion", async () => 
       return "https://www.youtube.com/";
     },
   });
-  assert.equal(outcome, "retries-exhausted");
+  assert.equal(outcome, "dismissed-external");
   assert.equal(reloads, MAX_ROUTE_RETRIES);
   assert.equal(stub.seen.length, MAX_ROUTE_RETRIES + 1);
-  assert.deepEqual(external, []);
+  assert.deepEqual(stub.seen[stub.seen.length - 1].buttons, [
+    "在瀏覽器中開啟 (Open in browser)",
+    "支援 (Support)",
+  ]);
+  assert.deepEqual(external, ["https://www.youtube.com/"]);
 });
 
 test("recoverTvRoute treats a throwing reload as load-failed and continues", async () => {
