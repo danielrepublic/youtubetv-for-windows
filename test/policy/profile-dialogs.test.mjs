@@ -166,6 +166,29 @@ test("ensureProfileDirectory creates, validates, and reports reasons", () => {
   assert.match(failed.reason, /cannot create/);
 });
 
+test("ensureProfileDirectory reports an existing but unwritable directory", () => {
+  const fileSystem = fakeFileSystem();
+  fileSystem.state.writeFailPrefix = "C:\\base";
+  const result = ensureProfileDirectory("C:\\base\\profile", fileSystem);
+  assert.equal(result.ok, false);
+  assert.match(result.reason, /not writable/);
+});
+
+test("an existing but unwritable SID directory falls back to a temporary profile", () => {
+  const fileSystem = fakeFileSystem();
+  fileSystem.state.writeFailPrefix = "C:\\ProgramData";
+  const { activation, sessionPaths, userDataPaths } = activateWith({
+    fileSystem,
+    ensureFallback: (injected) => ensureFallbackProfileDirectory(injected),
+  });
+  assert.equal(activation.usedFallback, true);
+  assert.equal(activation.migration, null);
+  assert.ok(activation.guidance !== null);
+  assert.ok(activation.directory.includes("youtubetv-for-windows-profile-"));
+  assert.equal(sessionPaths.length, 1);
+  assert.equal(userDataPaths.length, 1);
+});
+
 test("activation redirects BOTH data paths onto the SID directory", () => {
   const { activation, sessionPaths, userDataPaths } = activateWith();
   const userDirectory = path.join(

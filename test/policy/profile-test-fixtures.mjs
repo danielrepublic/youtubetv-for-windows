@@ -18,6 +18,7 @@ export function fakeFileSystem(entries = []) {
     files: new Set(),
     mkdirFails: false,
     mkdirFailPrefix: null,
+    writeFailPrefix: null,
     mkdtempFails: false,
     counter: 0,
   };
@@ -48,6 +49,18 @@ export function fakeFileSystem(entries = []) {
       const candidate = `${prefix}fake-${++state.counter}`;
       state.directories.add(candidate);
       return candidate;
+    },
+    writeFileSync: (candidate) => {
+      if (
+        state.writeFailPrefix !== null &&
+        candidate.startsWith(state.writeFailPrefix)
+      ) {
+        throw new Error("EACCES: permission denied");
+      }
+      state.files.add(candidate);
+    },
+    unlinkSync: (candidate) => {
+      state.files.delete(candidate);
     },
   };
 }
