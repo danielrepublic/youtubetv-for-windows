@@ -348,12 +348,20 @@ test("real Windows: hardening removes the Users grant from the whole subtree", a
     );
   }
   const userSddl = readSddl(userDirectory);
-  for (const ace of ["SY", "BA", sid]) {
+  for (const ace of ["SY", "BA"]) {
     assert.ok(
       userSddl.includes(`(A;OICI;FA;;;${ace})`),
       `the SID directory must grant full control to ${ace}; SDDL: ${userSddl}`,
     );
   }
+  // The owner ACE appears as the literal SID for an ordinary account, but
+  // Windows renders the built-in Administrator (RID 500, as on CI) as the
+  // "LA" alias, so accept either form.
+  assert.ok(
+    userSddl.includes(`(A;OICI;FA;;;${sid})`) ||
+      userSddl.includes("(A;OICI;FA;;;LA)"),
+    `the SID directory must grant full control to the owner; SDDL: ${userSddl}`,
+  );
   // The owner still works in its own tree: read, write, append, delete.
   const probe = path.join(profileDirectory, "owner-probe.txt");
   fs.writeFileSync(probe, "owner write", "utf8");
